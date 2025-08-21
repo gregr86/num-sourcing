@@ -1,0 +1,83 @@
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  AGENT
+  ADMIN
+}
+
+enum MandateStatus {
+  AVAILABLE
+  RESERVED
+  SIGNED
+}
+
+enum AllocationStatus {
+  RESERVED
+  DRAFT
+  SIGNED
+  RELEASED
+}
+
+enum FileKind {
+  SIGNED
+  DRAFT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  password     String
+  role         Role     @default(AGENT)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  allocations  MandateAllocation[]
+}
+
+model MandateNumber {
+  id           String   @id @default(cuid())
+  code         String   @unique         // ex: "460 M 25"
+  year         Int                       // ex: 2025
+  seq          Int                       // ex: 460
+  status       MandateStatus @default(AVAILABLE)
+  createdAt    DateTime @default(now())
+  allocations  MandateAllocation[]
+
+  @@unique([year, seq])
+  @@index([status, year, seq])
+}
+
+model MandateAllocation {
+  id              String   @id @default(cuid())
+  mandateNumberId String
+  userId          String
+  status          AllocationStatus @default(RESERVED)
+  reservedAt      DateTime @default(now())
+  deadlineAt      DateTime
+  signedAt        DateTime?
+  releasedAt      DateTime?
+  notes           String?
+
+  files           MandateFile[]
+  user            User           @relation(fields: [userId], references: [id])
+  mandate         MandateNumber  @relation(fields: [mandateNumberId], references: [id])
+
+  @@index([status, deadlineAt])
+}
+
+model MandateFile {
+  id           String   @id @default(cuid())
+  allocationId String
+  kind         FileKind
+  storageKey   String
+  sha256       String
+  uploadedAt   DateTime @default(now())
+  allocation   MandateAllocation @relation(fields: [allocationId], references: [id])
+}
