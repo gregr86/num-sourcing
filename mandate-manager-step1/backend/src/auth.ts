@@ -3,18 +3,15 @@ import { prisma } from './prisma'
 import bcrypt from 'bcryptjs'
 import { SignJWT, jwtVerify } from 'jose'
 import type { Role } from '@prisma/client'
+import bcrypt from 'bcryptjs'
+
+export const normalizeEmail = (s: string) => s.trim().toLowerCase()
+export const hashPassword = (pw: string) => bcrypt.hash(pw, 12)
+export const verifyPassword = (pw: string, hash: string) => bcrypt.compare(pw, hash)
 
 const encoder = new TextEncoder()
 const secretKey = encoder.encode(process.env.JWT_SECRET || 'change_me')
 
-export async function hashPassword(pw: string) {
-  const salt = await bcrypt.genSalt(10)
-  return bcrypt.hash(pw, salt)
-}
-
-export async function verifyPassword(pw: string, hash: string) {
-  return bcrypt.compare(pw, hash)
-}
 
 export async function issueAccessToken(user: { id: string; email: string; role: Role }) {
   const jwt = await new SignJWT({ sub: user.id, email: user.email, role: user.role })

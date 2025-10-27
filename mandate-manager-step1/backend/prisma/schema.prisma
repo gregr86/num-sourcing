@@ -1,4 +1,4 @@
-
+// backend/prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -9,8 +9,8 @@ datasource db {
 }
 
 enum Role {
-  AGENT
   ADMIN
+  AGENT
 }
 
 enum MandateStatus {
@@ -27,57 +27,58 @@ enum AllocationStatus {
 }
 
 enum FileKind {
-  SIGNED
   DRAFT
+  SIGNED
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  password     String
-  role         Role     @default(AGENT)
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  allocations  MandateAllocation[]
+  id          String              @id @default(cuid())
+  email       String              @unique
+  password    String
+  role        Role
+  active      Boolean             @default(true)
+  firstName   String?
+  lastName    String?
+  createdAt   DateTime            @default(now())
+  allocations MandateAllocation[]
 }
 
 model MandateNumber {
-  id           String   @id @default(cuid())
-  code         String   @unique         // ex: "460 M 25"
-  year         Int                       // ex: 2025
-  seq          Int                       // ex: 460
-  status       MandateStatus @default(AVAILABLE)
-  createdAt    DateTime @default(now())
-  allocations  MandateAllocation[]
+  id          String              @id @default(cuid())
+  code        String              @unique
+  year        Int
+  seq         Int
+  status      MandateStatus       @default(AVAILABLE)
+  allocations MandateAllocation[]
 
   @@unique([year, seq])
   @@index([status, year, seq])
 }
 
 model MandateAllocation {
-  id              String   @id @default(cuid())
-  mandateNumberId String
+  id              String            @id @default(cuid())
   userId          String
-  status          AllocationStatus @default(RESERVED)
-  reservedAt      DateTime @default(now())
-  deadlineAt      DateTime
+  mandateNumberId String
+  status          AllocationStatus  @default(RESERVED)
+  reservedAt      DateTime          @default(now())
+  deadlineAt      DateTime?
   signedAt        DateTime?
   releasedAt      DateTime?
-  notes           String?
 
-  files           MandateFile[]
-  user            User           @relation(fields: [userId], references: [id])
-  mandate         MandateNumber  @relation(fields: [mandateNumberId], references: [id])
+  user     User          @relation(fields: [userId], references: [id])
+  mandate  MandateNumber @relation(fields: [mandateNumberId], references: [id])
+  files    MandateFile[]
 
   @@index([status, deadlineAt])
 }
 
 model MandateFile {
-  id           String   @id @default(cuid())
+  id           String       @id @default(cuid())
   allocationId String
   kind         FileKind
+  createdAt    DateTime     @default(now())
   storageKey   String
   sha256       String
-  uploadedAt   DateTime @default(now())
-  allocation   MandateAllocation @relation(fields: [allocationId], references: [id])
+
+  allocation MandateAllocation @relation(fields: [allocationId], references: [id])
 }
