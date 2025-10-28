@@ -351,29 +351,35 @@
       </CardHeader>
       <CardContent class="space-y-4">
         <!-- Filtres -->
-        <div class="flex flex-wrap gap-2">
-          <Input
-            v-model="mandatesFilters.q"
-            placeholder="Recherche code..."
-            class="max-w-xs"
-          />
-          <Input
-            v-model.number="mandatesFilters.year"
-            type="number"
-            placeholder="Année"
-            class="w-32"
-          />
-          <Select v-model="mandatesFilters.status" class="w-40">
-            <option value="">(tous statuts)</option>
-            <option value="AVAILABLE">AVAILABLE</option>
-            <option value="RESERVED">RESERVED</option>
-            <option value="SIGNED">SIGNED</option>
-          </Select>
-          <Button @click="loadMandates">
-            <Search class="mr-2 h-4 w-4" />
-            Rechercher
-          </Button>
-        </div>
+<div class="flex flex-wrap gap-2">
+  <Input
+    v-model="mandatesFilters.q"
+    placeholder="Recherche code..."
+    class="max-w-xs"
+  />
+  <Input
+    v-model.number="mandatesFilters.year"
+    type="number"
+    placeholder="Année"
+    class="w-32"
+  />
+  <Select v-model="mandatesFilters.status" class="w-40">
+    <option value="">(tous statuts)</option>
+    <option value="AVAILABLE">AVAILABLE</option>
+    <option value="RESERVED">RESERVED</option>
+    <option value="SIGNED">SIGNED</option>
+  </Select>
+  <Button @click="loadMandates">
+    <Search class="mr-2 h-4 w-4" />
+    Rechercher
+  </Button>
+  
+  <!-- ✅ NOUVEAU BOUTON -->
+  <Button variant="outline" @click="syncMandateStatuses">
+    <RotateCcw class="mr-2 h-4 w-4" />
+    Synchroniser statuts
+  </Button>
+</div>
 
         <!-- Table -->
         <div v-if="mandates.items.length" class="rounded-md border">
@@ -579,6 +585,9 @@ async function loadAllocations() {
   const res = await api.get(`/admin/mandate-allocations?${p.toString()}`)
   allocs.value.items = res.items
   allocs.value.total = res.total
+  
+  // ✅ NOUVEAU: Recharger aussi les numéros pour voir les changements de statut
+  await loadMandates()
 }
 
 function fullName(u?: { firstName?: string | null; lastName?: string | null } | null) {
@@ -641,6 +650,11 @@ async function releaseAllocation(alloc: AllocRow) {
     // Utiliser la route existante pour libérer le numéro
     await api.post(`/admin/mandate-numbers/${alloc.mandateNumberId}/release`)
     
+    // ✅ NOUVEAU: Mettre à jour explicitement le statut de l'allocation en RELEASED
+    await api.patch(`/admin/mandate-allocations/${alloc.id}`, {
+      status: 'RELEASED'
+    })
+
     // Recharger les allocations pour voir le changement
     await loadAllocations()
     
@@ -706,6 +720,23 @@ async function releaseMandate(m: MandateRow) {
   await api.post(`/admin/mandate-numbers/${m.id}/release`)
   await loadMandates()
 }
+
+// ✅ NOUVELLE FONCTION: Synchroniser les statuts entre numéros et allocations
+async function syncMandateStatuses() {
+  try {
+    // Appeler une nouvelle route backend pour synchroniser les statuts
+    await api.post('/admin/sync-mandate-statuses')
+    
+    // Recharger toutes les données
+    await Promise.all([loadAllocations(), loadMandates()])
+    
+    alert('Synchronisation des statuts terminée')
+  } catch (error) {
+    console.error('Erreur lors de la synchronisation:', error)
+    alert('Erreur lors de la synchronisation des statuts')
+  }
+}
+
 
 /* ---------- init ---------- */
 onMounted(async () => {

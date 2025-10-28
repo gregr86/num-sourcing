@@ -699,6 +699,118 @@ const app = new Elysia()
     return { url }
   })
 
+  // ✅ NOUVELLE ROUTE ELYSIA: Synchroniser les statuts entre numéros et allocations
+  .post('/admin/sync-mandate-statuses', async ({ cookie, set }) => {
+    const auth = await getUserFromToken(cookie.access_token?.value)
+    if (!auth || auth.role !== 'ADMIN') {
+      set.status = 403
+      return { error: 'Forbidden' }
+    }
+
+    try {
+      // Récupérer toutes les allocations actives
+      const allocations = await prisma.mandateAllocation.findMany({
+        where: {
+          status: { in: ['RESERVED', 'DRAFT', 'SIGNED'] }
+        },
+        include: { mandate: true }
+      })
+      
+      // Mettre à jour le statut des numéros de mandats selon leurs allocations
+      for (const alloc of allocations) {
+        if (alloc.mandate) {
+          let newStatus: 'AVAILABLE' | 'RESERVED' | 'SIGNED' = 'AVAILABLE'
+          
+          if (alloc.status === 'RESERVED') newStatus = 'RESERVED'
+          else if (alloc.status === 'DRAFT') newStatus = 'RESERVED'
+          else if (alloc.status === 'SIGNED') newStatus = 'SIGNED'
+          
+          // Mettre à jour le statut du numéro si nécessaire
+          if (alloc.mandate.status !== newStatus) {
+            await prisma.mandateNumber.update({
+              where: { id: alloc.mandate.id },
+              data: { status: newStatus }
+            })
+          }
+        }
+      }
+      
+      // Libérer les numéros qui n'ont plus d'allocations actives
+      await prisma.mandateNumber.updateMany({
+        where: {
+          status: { in: ['RESERVED', 'SIGNED'] },
+          allocations: {
+            none: {
+              status: { in: ['RESERVED', 'DRAFT', 'SIGNED'] }
+            }
+          }
+        },
+        data: { status: 'AVAILABLE' }
+      })
+      
+      return { success: true, message: 'Statuts synchronisés avec succès' }
+    } catch (error) {
+      console.error('Erreur sync statuts:', error)
+      set.status = 500
+      return { error: 'Erreur lors de la synchronisation' }
+    }
+  })
+
+  // ✅ NOUVELLE ROUTE ELYSIA: Mettre à jour une allocation spécifique
+  .patch('/admin/mandate-allocations/:id', async ({ cookie, params, body, set }) => {
+    const auth = await getUserFromToken(cookie.access_token?.value)
+    if (!auth || auth.role !== 'ADMIN') {
+      set.status = 403
+      return { error: 'Forbidden' }
+    }
+
+    try {
+      const { status } = body as { status: 'RESERVED' | 'DRAFT' | 'SIGNED' | 'RELEASED' }
+      
+      if (!['RESERVED', 'DRAFT', 'SIGNED', 'RELEASED'].includes(status)) {
+        set.status = 400
+        return { error: 'Statut invalide' }
+      }
+      
+      const allocation = await prisma.mandateAllocation.update({
+        where: { id: params.id },
+        data: { 
+          status,
+          releasedAt: status === 'RELEASED' ? new Date() : undefined
+        },
+        include: { mandate: true }
+      })
+      
+      // Mettre à jour le statut du numéro associé si nécessaire
+      if (allocation.mandate) {
+        let mandateStatus: 'AVAILABLE' | 'RESERVED' | 'SIGNED' = 'AVAILABLE'
+        if (status === 'RESERVED' || status === 'DRAFT') mandateStatus = 'RESERVED'
+        else if (status === 'SIGNED') mandateStatus = 'SIGNED'
+        else if (status === 'RELEASED') mandateStatus = 'AVAILABLE'
+        
+        await prisma.mandateNumber.update({
+          where: { id: allocation.mandate.id },
+          data: { status: mandateStatus }
+        })
+      }
+      
+      return allocation
+    } catch (error) {
+      console.error('Erreur mise à jour allocation:', error)
+      set.status = 500
+      return { error: 'Erreur lors de la mise à jour' }
+    }
+  }, {
+    body: t.Object({
+      status: t.Union([
+        t.Literal('RESERVED'),
+        t.Literal('DRAFT'), 
+        t.Literal('SIGNED'),
+        t.Literal('RELEASED')
+      ])
+    })
+  })
+
 // ----- BOOTSTRAP & START -----
 async function ensureBootstrapAdmin() {
   const email = normalizeEmail(process.env.ADMIN_EMAIL || 'admin@sourcinginvest.local')
