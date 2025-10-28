@@ -13,21 +13,26 @@
             <Label for="email">Email</Label>
             <Input
               id="email"
-              v-model="email"
+              v-model="form.email"
               type="email"
               placeholder="nom@exemple.com"
               required
+              autocomplete="email"
             />
+            <p class="text-xs text-muted-foreground">Valeur: {{ form.email }}</p>
           </div>
           
           <div class="space-y-2">
             <Label for="password">Mot de passe</Label>
             <Input
               id="password"
-              v-model="password"
+              v-model="form.password"
               type="password"
+              placeholder="••••••••"
               required
+              autocomplete="current-password"
             />
+            <p class="text-xs text-muted-foreground">Longueur: {{ form.password.length }}</p>
           </div>
 
           <div v-if="error" class="text-sm text-destructive">
@@ -38,6 +43,13 @@
             <Loader2 v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
             Se connecter
           </Button>
+          
+          <!-- Aide pour le développement -->
+          <div class="text-xs text-muted-foreground space-y-1 mt-4 p-3 bg-muted rounded">
+            <p class="font-semibold">Comptes de test :</p>
+            <p>• Admin: admin@sourcinginvest.local / password</p>
+            <p>• Agent: agent@sourcinginvest.local / password</p>
+          </div>
         </form>
       </CardContent>
     </Card>
@@ -45,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { Loader2 } from 'lucide-vue-next'
@@ -59,19 +71,52 @@ import Label from '../components/ui/label.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
-const email = ref('admin@sourcinginvest.local')
-const password = ref('password')
+
+// Utiliser reactive pour être sûr que ça fonctionne
+const form = reactive({
+  email: '',
+  password: ''
+})
+
 const loading = ref(false)
 const error = ref('')
 
 async function onSubmit() {
   error.value = ''
+  
+  console.log('📝 Valeurs du formulaire:')
+  console.log('  - Email:', form.email)
+  console.log('  - Password length:', form.password.length)
+  
+  // Validation simple
+  if (!form.email || !form.password) {
+    error.value = 'Veuillez remplir tous les champs'
+    console.error('❌ Champs vides!')
+    return
+  }
+  
   loading.value = true
+  
+  console.log('🔐 Tentative de connexion avec:', form.email)
+  
   try {
-    await auth.login(email.value, password.value)
-    router.push(auth.me?.role === 'ADMIN' ? '/admin' : '/agent')
-  } catch {
-    error.value = 'Identifiants invalides'
+    await auth.login(form.email, form.password)
+    
+    console.log('✅ Connexion réussie')
+    console.log('👤 Utilisateur:', auth.me)
+    console.log('🔑 Rôle:', auth.me?.role)
+    
+    // Déterminer la route en fonction du rôle
+    const targetRoute = auth.me?.role === 'ADMIN' ? '/admin' : '/agent'
+    console.log('🔄 Redirection vers:', targetRoute)
+    
+    // Forcer la redirection
+    await router.push(targetRoute)
+    
+    console.log('✅ Redirection effectuée')
+  } catch (err: any) {
+    console.error('❌ Erreur de connexion:', err)
+    error.value = err?.message || 'Identifiants invalides'
   } finally {
     loading.value = false
   }

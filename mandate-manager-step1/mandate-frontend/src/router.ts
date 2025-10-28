@@ -35,16 +35,26 @@ router.beforeEach(async (to, from, next) => {
   
   console.log('🔄 Navigation:', from.path, '→', to.path)
   console.log('👤 User actuel:', auth.me)
+  console.log('🔑 Rôle actuel:', auth.me?.role)
+  
+  // Si on va vers la page de login et qu'on est déjà connecté
+  if (to.name === 'login' && auth.me) {
+    const redirectRoute = auth.me.role === 'ADMIN' ? '/admin' : '/agent'
+    console.log('🔄 Déjà connecté, redirect vers', redirectRoute)
+    return next(redirectRoute)
+  }
   
   // Si la route nécessite une authentification
   if (to.meta.requiresAuth) {
     // Essayer de récupérer l'utilisateur si pas encore chargé
     if (!auth.me) {
       try {
+        console.log('📡 Tentative de récupération du user...')
         await auth.fetchMe()
         console.log('✅ User récupéré:', auth.me)
       } catch (error) {
         console.error('❌ Erreur fetchMe:', error)
+        console.log('⛔ Redirection vers login')
         return next({ name: 'login' })
       }
     }
@@ -59,20 +69,13 @@ router.beforeEach(async (to, from, next) => {
     const allowedRoles = to.meta.allowedRoles as string[] | undefined
     if (allowedRoles && !allowedRoles.includes(auth.me.role)) {
       console.log('⛔ Rôle non autorisé:', auth.me.role, '- Rôles autorisés:', allowedRoles)
-      // Rediriger vers le dashboard approprié
-      const redirectRoute = auth.me.role === 'ADMIN' ? 'admin' : 'agent'
+      // Rediriger vers le dashboard approprié selon le rôle
+      const redirectRoute = auth.me.role === 'ADMIN' ? '/admin' : '/agent'
       console.log('🔄 Redirection vers:', redirectRoute)
-      return next({ name: redirectRoute })
+      return next(redirectRoute)
     }
     
     console.log('✅ Accès autorisé pour', auth.me.role, 'vers', to.path)
-  }
-  
-  // Si déjà connecté et va sur la page de login, rediriger
-  if (to.name === 'login' && auth.me) {
-    const redirectRoute = auth.me.role === 'ADMIN' ? 'admin' : 'agent'
-    console.log('🔄 Déjà connecté, redirect vers', redirectRoute)
-    return next({ name: redirectRoute })
   }
   
   next()

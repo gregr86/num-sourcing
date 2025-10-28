@@ -24,22 +24,31 @@ const app = new Elysia()
       const { email, password } = body as { email: string; password: string }
       const e = normalizeEmail(email)
 
+      console.log('🔐 Tentative de connexion:', e)
+
       // recherche insensible à la casse
       const user = await prisma.user.findFirst({
         where: { email: { equals: e, mode: 'insensitive' } }
       })
+      
+      console.log('👤 Utilisateur trouvé:', user ? `${user.email} (${user.role})` : 'AUCUN')
+
       if (!user || !user.active) {
+        console.log('❌ Utilisateur non trouvé ou inactif')
         set.status = 401
         return { error: 'Invalid credentials' }
       }
 
       const ok = await verifyPassword(password, user.password)
+      console.log('🔑 Vérification mot de passe:', ok ? 'OK' : 'ECHEC')
+      
       if (!ok) {
+        console.log('❌ Mot de passe incorrect')
         set.status = 401
         return { error: 'Invalid credentials' }
       }
 
-      const token = await issueAccessToken({ id: user.id, role: user.role })
+      const token = await issueAccessToken({ id: user.id, email: user.email, role: user.role })
       cookie.access_token.set({
         value: token,
         httpOnly: true,
@@ -48,6 +57,9 @@ const app = new Elysia()
         path: '/',
         maxAge: 60 * 60 * 24 * 30 // 30 jours
       })
+      
+      console.log('✅ Connexion réussie pour:', user.email, '- Rôle:', user.role)
+      
       return {
         ok: true,
         user: { id: user.id, email: user.email, role: user.role, firstName: user.firstName, lastName: user.lastName }
@@ -165,7 +177,6 @@ const app = new Elysia()
       set.status = 401
       return { error: 'Unauthenticated' }
     }
-    // @ts-ignore
     if (auth.role !== 'AGENT') {
       set.status = 403
       return { error: 'Forbidden' }
@@ -332,7 +343,6 @@ const app = new Elysia()
     '/admin/users',
     async ({ cookie, body, set }) => {
       const auth = await getUserFromToken(cookie.access_token?.value)
-      // @ts-ignore
       if (!auth || auth.role !== 'ADMIN') {
         set.status = 403
         return { error: 'Forbidden' }
@@ -371,7 +381,6 @@ const app = new Elysia()
   // --- ADMIN: liste utilisateurs ---
   .get('/admin/users', async ({ cookie, query, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
-    // @ts-ignore
     if (!auth || auth.role !== 'ADMIN') {
       set.status = 403
       return { error: 'Forbidden' }
@@ -412,7 +421,6 @@ const app = new Elysia()
     '/admin/users/:id',
     async ({ cookie, params, body, set }) => {
       const auth = await getUserFromToken(cookie.access_token?.value)
-      // @ts-ignore
       if (!auth || auth.role !== 'ADMIN') {
         set.status = 403
         return { error: 'Forbidden' }
@@ -461,7 +469,6 @@ const app = new Elysia()
   // --- ADMIN: lister numéros de mandat ---
   .get('/admin/mandate-numbers', async ({ cookie, query, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
-    // @ts-ignore
     if (!auth || auth.role !== 'ADMIN') {
       set.status = 403
       return { error: 'Forbidden' }
@@ -496,7 +503,6 @@ const app = new Elysia()
     '/admin/mandate-numbers/:id',
     async ({ cookie, params, body, set }) => {
       const auth = await getUserFromToken(cookie.access_token?.value)
-      // @ts-ignore
       if (!auth || auth.role !== 'ADMIN') {
         set.status = 403
         return { error: 'Forbidden' }
@@ -532,7 +538,6 @@ const app = new Elysia()
   // --- ADMIN: supprimer numéro (sans allocations) ---
   .delete('/admin/mandate-numbers/:id', async ({ cookie, params, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
-    // @ts-ignore
     if (!auth || auth.role !== 'ADMIN') {
       set.status = 403
       return { error: 'Forbidden' }
@@ -551,7 +556,6 @@ const app = new Elysia()
   // --- ADMIN: remettre un numéro en disponible (release) ---
   .post('/admin/mandate-numbers/:id/release', async ({ cookie, params, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
-    // @ts-ignore
     if (!auth || auth.role !== 'ADMIN') {
       set.status = 403
       return { error: 'Forbidden' }
@@ -579,7 +583,6 @@ const app = new Elysia()
       set.status = 401
       return { error: 'Unauthenticated' }
     }
-    // @ts-ignore
     if (auth.role !== 'ADMIN') {
       set.status = 403
       return { error: 'Forbidden' }
@@ -591,7 +594,6 @@ const app = new Elysia()
   // --- ADMIN: lister allocations + fichiers + agent ---
   .get('/admin/mandate-allocations', async ({ cookie, query, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
-    // @ts-ignore
     if (!auth || auth.role !== 'ADMIN') {
       set.status = 403
       return { error: 'Forbidden' }
@@ -644,7 +646,6 @@ const app = new Elysia()
   // --- ADMIN: URL GET pré-signée pour n'importe quel fichier ---
   .get('/admin/files/:id/url', async ({ cookie, params, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
-    // @ts-ignore
     if (!auth || auth.role !== 'ADMIN') {
       set.status = 403
       return { error: 'Forbidden' }

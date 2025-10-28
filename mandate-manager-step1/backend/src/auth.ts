@@ -1,9 +1,7 @@
-
 import { prisma } from './prisma'
 import bcrypt from 'bcryptjs'
 import { SignJWT, jwtVerify } from 'jose'
 import type { Role } from '@prisma/client'
-import bcrypt from 'bcryptjs'
 
 export const normalizeEmail = (s: string) => s.trim().toLowerCase()
 export const hashPassword = (pw: string) => bcrypt.hash(pw, 12)
