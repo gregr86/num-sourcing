@@ -59,7 +59,7 @@ import Label from '../components/ui/label.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
-const email = ref('agent@sourcinginvest.local')
+const email = ref('admin@sourcinginvest.local')
 const password = ref('password')
 const loading = ref(false)
 const error = ref('')

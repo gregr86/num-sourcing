@@ -8,37 +8,32 @@
         </div>
 
         <nav v-if="me" class="flex items-center gap-2">
-          <Button
+          <RouterLink 
             v-if="me?.role === 'AGENT'"
-            variant="ghost"
-            as-child
+            to="/agent"
           >
-            <RouterLink to="/agent">
+            <Button variant="ghost">
               <User class="mr-2 h-4 w-4" />
               Agent
-            </RouterLink>
-          </Button>
+            </Button>
+          </RouterLink>
           
-          <Button
+          <RouterLink 
             v-if="me?.role === 'ADMIN'"
-            variant="ghost"
-            as-child
+            to="/admin"
           >
-            <RouterLink to="/admin">
+            <Button variant="ghost">
               <Shield class="mr-2 h-4 w-4" />
               Admin
-            </RouterLink>
-          </Button>
+            </Button>
+          </RouterLink>
           
-          <Button
-            variant="ghost"
-            as-child
-          >
-            <RouterLink to="/settings">
+          <RouterLink to="/settings">
+            <Button variant="ghost">
               <Settings class="mr-2 h-4 w-4" />
               Paramètres
-            </RouterLink>
-          </Button>
+            </Button>
+          </RouterLink>
           
           <Button variant="outline" @click="logout">
             <LogOut class="mr-2 h-4 w-4" />
@@ -66,12 +61,28 @@ const router = useRouter()
 const auth = useAuthStore()
 const { me } = storeToRefs(auth)
 
-onMounted(() => {
-  if (!me.value) auth.fetchMe().catch(() => {})
+onMounted(async () => {
+  if (!me.value) {
+    try {
+      await auth.fetchMe()
+      console.log('👤 User chargé dans App.vue:', me.value)
+    } catch (error) {
+      console.log('⚠️ Pas de session active dans App.vue')
+    }
+  } else {
+    console.log('👤 User déjà présent:', me.value)
+  }
 })
 
 async function logout() {
-  await auth.logout()
-  router.push('/')
+  try {
+    await auth.logout()
+    console.log('✅ Déconnexion réussie')
+    router.push('/')
+  } catch (error) {
+    console.error('❌ Erreur lors de la déconnexion:', error)
+    auth.clear()
+    router.push('/')
+  }
 }
 </script>

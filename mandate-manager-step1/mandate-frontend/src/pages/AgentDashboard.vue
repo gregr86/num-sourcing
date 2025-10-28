@@ -66,38 +66,31 @@
                 </TableCell>
                 <TableCell class="text-right">
                   <div class="flex justify-end gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      as-child
-                    >
-                      <label>
-                        <Upload class="mr-2 h-4 w-4" />
-                        Brouillon
-                        <input
-                          type="file"
-                          accept="application/pdf"
-                          @change="fileChosen($event, m.code, 'DRAFT')"
-                          class="hidden"
-                        />
-                      </label>
-                    </Button>
-                    <Button
-                      variant="default"
-                      size="sm"
-                      as-child
-                    >
-                      <label>
-                        <CheckCircle class="mr-2 h-4 w-4" />
-                        Signé
-                        <input
-                          type="file"
-                          accept="application/pdf"
-                          @change="fileChosen($event, m.code, 'SIGNED')"
-                          class="hidden"
-                        />
-                      </label>
-                    </Button>
+                    <!-- Bouton Upload Brouillon -->
+                    <label class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-3 cursor-pointer">
+                      <Upload class="mr-2 h-4 w-4" />
+                      Brouillon
+                      <input
+                        type="file"
+                        accept="application/pdf"
+                        @change="fileChosen($event, m.code, 'DRAFT')"
+                        class="hidden"
+                      />
+                    </label>
+                    
+                    <!-- Bouton Upload Signé -->
+                    <label class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-8 px-3 cursor-pointer">
+                      <CheckCircle class="mr-2 h-4 w-4" />
+                      Signé
+                      <input
+                        type="file"
+                        accept="application/pdf"
+                        @change="fileChosen($event, m.code, 'SIGNED')"
+                        class="hidden"
+                      />
+                    </label>
+                    
+                    <!-- Boutons pour voir les fichiers -->
                     <Button
                       v-for="f in m.files"
                       :key="f.id"
