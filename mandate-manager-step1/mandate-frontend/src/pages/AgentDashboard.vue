@@ -67,26 +67,36 @@
                 <TableCell class="text-right">
                   <div class="flex justify-end gap-2">
                     <!-- Bouton Upload Brouillon -->
-                    <label class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-3 cursor-pointer">
-                      <Upload class="mr-2 h-4 w-4" />
+                    <label 
+                      class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-3 cursor-pointer"
+                      :class="{ 'opacity-50 pointer-events-none': uploading[m.code]?.DRAFT }"
+                    >
+                      <Loader2 v-if="uploading[m.code]?.DRAFT" class="mr-2 h-4 w-4 animate-spin" />
+                      <Upload v-else class="mr-2 h-4 w-4" />
                       Brouillon
                       <input
                         type="file"
                         accept="application/pdf"
                         @change="fileChosen($event, m.code, 'DRAFT')"
                         class="hidden"
+                        :disabled="uploading[m.code]?.DRAFT"
                       />
                     </label>
                     
                     <!-- Bouton Upload Signé -->
-                    <label class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-8 px-3 cursor-pointer">
-                      <CheckCircle class="mr-2 h-4 w-4" />
+                    <label 
+                      class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-8 px-3 cursor-pointer"
+                      :class="{ 'opacity-50 pointer-events-none': uploading[m.code]?.SIGNED }"
+                    >
+                      <Loader2 v-if="uploading[m.code]?.SIGNED" class="mr-2 h-4 w-4 animate-spin" />
+                      <CheckCircle v-else class="mr-2 h-4 w-4" />
                       Signé
                       <input
                         type="file"
                         accept="application/pdf"
                         @change="fileChosen($event, m.code, 'SIGNED')"
                         class="hidden"
+                        :disabled="uploading[m.code]?.SIGNED"
                       />
                     </label>
                     
@@ -118,7 +128,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, reactive } from 'vue'
 import { api } from '../utils/api'
 import { Plus, Loader2, Copy, Upload, CheckCircle, Eye, FileText } from 'lucide-vue-next'
 import Button from '../components/ui/button.vue'
@@ -140,6 +150,7 @@ type Item = { id: string; code: string; status: string; deadlineAt?: string | nu
 const items = ref<Item[]>([])
 const reserving = ref(false)
 const reserveError = ref('')
+const uploading = reactive<Record<string, Record<FileKind, boolean>>>({})
 
 function getStatusVariant(status: string) {
   const variants: Record<string, 'default' | 'secondary' | 'success' | 'warning'> = {
@@ -179,22 +190,49 @@ async function fileChosen(e: Event, code: string, kind: FileKind) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  const { uploadUrl } = await api.post(`/mandates/${encodeURIComponent(code)}/upload-url`, { kind })
-  const r = await fetch(uploadUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/pdf' },
-    body: file
-  })
-  if (!r.ok) {
-    alert('Upload échoué')
-    return
+  
+  // Initialiser l'objet uploading pour ce code si nécessaire
+  if (!uploading[code]) {
+    uploading[code] = { DRAFT: false, SIGNED: false }
   }
-  await fetchMy()
+  
+  // Marquer comme en cours d'upload
+  uploading[code][kind] = true
+  
+  try {
+    const { uploadUrl } = await api.post(`/mandates/${encodeURIComponent(code)}/upload-url`, { kind })
+    const r = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/pdf' },
+      body: file
+    })
+    
+    if (!r.ok) {
+      alert('Upload échoué')
+      return
+    }
+    
+    // Recharger automatiquement la liste après upload réussi
+    await fetchMy()
+  } catch (error) {
+    console.error('Erreur upload:', error)
+    alert('Erreur lors de l\'upload')
+  } finally {
+    // Réinitialiser le statut d'upload
+    uploading[code][kind] = false
+    // Réinitialiser l'input file
+    input.value = ''
+  }
 }
 
 async function viewFile(code: string, id: string) {
-  const { url } = await api.get(`/mandates/${encodeURIComponent(code)}/files/${id}/url`)
-  window.open(url, '_blank')
+  try {
+    const { url } = await api.get(`/mandates/${encodeURIComponent(code)}/files/${id}/url`)
+    window.open(url, '_blank')
+  } catch (error) {
+    console.error('Erreur ouverture fichier:', error)
+    alert('Impossible d\'ouvrir le fichier')
+  }
 }
 
 onMounted(fetchMy)

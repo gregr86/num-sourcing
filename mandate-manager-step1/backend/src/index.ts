@@ -170,6 +170,44 @@ const app = new Elysia()
     { body: t.Object({ currentPassword: t.String(), newPassword: t.String() }) }
   )
 
+  // --- ACCOUNT: update profile (firstName, lastName) ---
+  .patch(
+    '/account/update-profile',
+    async ({ cookie, body, set }) => {
+      const auth = await getUserFromToken(cookie.access_token?.value)
+      if (!auth) {
+        set.status = 401
+        return { error: 'Unauthenticated' }
+      }
+
+      const { firstName, lastName } = body as { firstName?: string | null; lastName?: string | null }
+
+      try {
+        const updated = await prisma.user.update({
+          where: { id: auth.id },
+          data: {
+            firstName: firstName !== undefined ? firstName : undefined,
+            lastName: lastName !== undefined ? lastName : undefined
+          }
+        })
+        return { ok: true, user: { 
+          id: updated.id, 
+          email: updated.email, 
+          role: updated.role,
+          firstName: updated.firstName,
+          lastName: updated.lastName
+        }}
+      } catch {
+        set.status = 400
+        return { error: 'Update failed' }
+      }
+    },
+    { body: t.Object({ 
+      firstName: t.Optional(t.Union([t.String(), t.Null()])),
+      lastName: t.Optional(t.Union([t.String(), t.Null()]))
+    }) }
+  )
+
   // --- Mandats: réserver un numéro (format "460 M 25") ---
   .post('/mandates/reserve', async ({ cookie, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
@@ -631,6 +669,7 @@ const app = new Elysia()
     const items = rows.map((r) => ({
       id: r.id,
       code: r.mandate?.code,
+      mandateNumberId: r.mandateNumberId,
       status: r.status,
       deadlineAt: r.deadlineAt,
       reservedAt: r.reservedAt,

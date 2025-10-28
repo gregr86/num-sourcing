@@ -217,7 +217,7 @@
                 <TableHead>Statut</TableHead>
                 <TableHead>Agent</TableHead>
                 <TableHead>Deadline</TableHead>
-                <TableHead class="text-right">Fichiers</TableHead>
+                <TableHead class="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -238,7 +238,8 @@
                   {{ a.deadlineAt ? new Date(a.deadlineAt).toLocaleDateString('fr-FR') : '-' }}
                 </TableCell>
                 <TableCell class="text-right">
-                  <div class="flex justify-end gap-2">
+                  <div class="flex justify-end gap-2 flex-wrap">
+                    <!-- Boutons pour voir les fichiers existants -->
                     <Button
                       v-for="f in a.files"
                       :key="f.id"
@@ -249,6 +250,54 @@
                       <Eye class="mr-2 h-4 w-4" />
                       {{ f.kind }}
                     </Button>
+                    
+                    <!-- Boutons pour uploader des fichiers (seulement si RESERVED ou DRAFT) -->
+                    <template v-if="['RESERVED', 'DRAFT'].includes(a.status)">
+                      <!-- Upload Brouillon -->
+                      <label 
+                        class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-3 cursor-pointer"
+                        :class="{ 'opacity-50 pointer-events-none': adminUploading[a.code]?.DRAFT }"
+                      >
+                        <Loader2 v-if="adminUploading[a.code]?.DRAFT" class="mr-2 h-4 w-4 animate-spin" />
+                        <Upload v-else class="mr-2 h-4 w-4" />
+                        + Brouillon
+                        <input
+                          type="file"
+                          accept="application/pdf"
+                          @change="adminFileChosen($event, a.code, 'DRAFT')"
+                          class="hidden"
+                          :disabled="adminUploading[a.code]?.DRAFT"
+                        />
+                      </label>
+                      
+                      <!-- Upload Signé -->
+                      <label 
+                        class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-8 px-3 cursor-pointer"
+                        :class="{ 'opacity-50 pointer-events-none': adminUploading[a.code]?.SIGNED }"
+                      >
+                        <Loader2 v-if="adminUploading[a.code]?.SIGNED" class="mr-2 h-4 w-4 animate-spin" />
+                        <CheckCircle v-else class="mr-2 h-4 w-4" />
+                        + Signé
+                        <input
+                          type="file"
+                          accept="application/pdf"
+                          @change="adminFileChosen($event, a.code, 'SIGNED')"
+                          class="hidden"
+                          :disabled="adminUploading[a.code]?.SIGNED"
+                        />
+                      </label>
+                      
+                      <!-- ✅ NOUVEAU: Bouton pour libérer l'allocation -->
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        @click="releaseAllocation(a)"
+                        title="Libérer cette allocation et remettre le numéro disponible"
+                      >
+                        <Unlock class="mr-2 h-4 w-4" />
+                        Libérer
+                      </Button>
+                    </template>
                   </div>
                 </TableCell>
               </TableRow>
@@ -416,11 +465,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, reactive } from 'vue'
 import { api } from '../utils/api'
 import {
   UserPlus, Users, FileText, Hash, Search, Save, Trash2,
-  RotateCcw, Eye, ChevronLeft, ChevronRight
+  RotateCcw, Eye, ChevronLeft, ChevronRight, Upload, CheckCircle, Loader2, Unlock
 } from 'lucide-vue-next'
 import Button from '../components/ui/button.vue'
 import Card from '../components/ui/card.vue'
@@ -437,6 +486,8 @@ import TableBody from '../components/ui/table-body.vue'
 import TableRow from '../components/ui/table-row.vue'
 import TableHead from '../components/ui/table-head.vue'
 import TableCell from '../components/ui/table-cell.vue'
+
+type FileKind = 'DRAFT' | 'SIGNED'
 
 /* ---------- Create user ---------- */
 const newUser = ref<{
@@ -504,6 +555,7 @@ type FileRow = { id: string; kind: 'DRAFT' | 'SIGNED'; createdAt?: string }
 type AllocRow = {
   id: string
   code?: string
+  mandateNumberId?: string
   status: 'RESERVED' | 'DRAFT' | 'SIGNED' | 'RELEASED'
   deadlineAt?: string | null
   user?: {
@@ -516,6 +568,7 @@ type AllocRow = {
 }
 const allocs = ref({ items: [] as AllocRow[], total: 0, page: 1, pageSize: 50 })
 const allocFilters = ref({ q: '', status: '' })
+const adminUploading = reactive<Record<string, Record<FileKind, boolean>>>({})
 
 async function loadAllocations() {
   const p = new URLSearchParams()
@@ -535,8 +588,68 @@ function fullName(u?: { firstName?: string | null; lastName?: string | null } | 
 }
 
 async function openAdminFile(fileId: string) {
-  const { url } = await api.get(`/admin/files/${fileId}/url`)
-  window.open(url, '_blank')
+  try {
+    const { url } = await api.get(`/admin/files/${fileId}/url`)
+    window.open(url, '_blank')
+  } catch (error) {
+    console.error('Erreur ouverture fichier:', error)
+    alert('Impossible d\'ouvrir le fichier')
+  }
+}
+
+async function adminFileChosen(e: Event, code: string, kind: FileKind) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  
+  if (!adminUploading[code]) {
+    adminUploading[code] = { DRAFT: false, SIGNED: false }
+  }
+  
+  adminUploading[code][kind] = true
+  
+  try {
+    const { uploadUrl } = await api.post(`/mandates/${encodeURIComponent(code)}/upload-url`, { kind })
+    const r = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/pdf' },
+      body: file
+    })
+    
+    if (!r.ok) {
+      alert('Upload échoué')
+      return
+    }
+    
+    await loadAllocations()
+  } catch (error) {
+    console.error('Erreur upload:', error)
+    alert('Erreur lors de l\'upload')
+  } finally {
+    adminUploading[code][kind] = false
+    input.value = ''
+  }
+}
+
+// ✅ NOUVELLE FONCTION: Libérer une allocation
+async function releaseAllocation(alloc: AllocRow) {
+  if (!confirm(`Voulez-vous vraiment libérer l'allocation ${alloc.code} ?\n\nLe numéro sera remis en disponible et l'agent ne pourra plus l'utiliser.`)) {
+    return
+  }
+  
+  try {
+    // Utiliser la route existante pour libérer le numéro
+    await api.post(`/admin/mandate-numbers/${alloc.mandateNumberId}/release`)
+    
+    // Recharger les allocations pour voir le changement
+    await loadAllocations()
+    
+    // Optionnel: afficher un message de succès
+    alert(`L'allocation ${alloc.code} a été libérée avec succès`)
+  } catch (error) {
+    console.error('Erreur lors de la libération:', error)
+    alert('Erreur lors de la libération de l\'allocation')
+  }
 }
 
 function getStatusVariant(status: string) {

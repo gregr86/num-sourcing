@@ -8,13 +8,19 @@
         </div>
 
         <nav v-if="me" class="flex items-center gap-2">
+          <!-- Affichage du nom de l'utilisateur -->
+          <div class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-muted-foreground">
+            <User class="h-4 w-4" />
+            {{ displayName }}
+          </div>
+          
           <RouterLink 
             v-if="me?.role === 'AGENT'"
             to="/agent"
           >
             <Button variant="ghost">
-              <User class="mr-2 h-4 w-4" />
-              Agent
+              <Briefcase class="mr-2 h-4 w-4" />
+              Mes Mandats
             </Button>
           </RouterLink>
           
@@ -24,7 +30,7 @@
           >
             <Button variant="ghost">
               <Shield class="mr-2 h-4 w-4" />
-              Admin
+              Administration
             </Button>
           </RouterLink>
           
@@ -53,13 +59,39 @@
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { onMounted } from 'vue'
-import { FileText, User, Shield, Settings, LogOut } from 'lucide-vue-next'
+import { onMounted, computed } from 'vue'
+import { FileText, User, Shield, Settings, LogOut, Briefcase } from 'lucide-vue-next'
 import Button from './components/ui/button.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
 const { me } = storeToRefs(auth)
+
+// Computed pour afficher le nom complet ou l'email
+const displayName = computed(() => {
+  if (!me.value) return ''
+  
+  const firstName = me.value.firstName?.trim()
+  const lastName = me.value.lastName?.trim()
+  
+  // Si on a prénom ET nom
+  if (firstName && lastName) {
+    return `${firstName} ${lastName}`
+  }
+  
+  // Si on a seulement le prénom
+  if (firstName) {
+    return firstName
+  }
+  
+  // Si on a seulement le nom
+  if (lastName) {
+    return lastName
+  }
+  
+  // Sinon, afficher l'email (partie avant @)
+  return me.value.email.split('@')[0]
+})
 
 onMounted(async () => {
   if (!me.value) {
