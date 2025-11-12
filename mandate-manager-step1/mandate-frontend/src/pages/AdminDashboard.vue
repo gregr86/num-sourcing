@@ -60,6 +60,51 @@
       </CardContent>
     </Card>
 
+    <!-- ALLOUER UN NUMÉRO À UN AGENT -->
+    <Card>
+      <CardHeader>
+        <CardTitle class="flex items-center gap-2">
+          <UserCog class="h-5 w-5" />
+          Allouer un numéro à un agent
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form @submit.prevent="allocateMandate" class="space-y-4">
+          <div class="grid gap-4 md:grid-cols-2">
+            <div class="space-y-2">
+              <Label for="agent">Agent</Label>
+              <Select id="agent" v-model="allocation.userId" required>
+                <option value="">Sélectionner un agent...</option>
+                <option v-for="agent in agents" :key="agent.id" :value="agent.id">
+                  {{ fullName(agent) }} ({{ agent.email }})
+                </option>
+              </Select>
+            </div>
+            
+            <div class="space-y-2">
+              <Label for="mandate">Numéro de mandat</Label>
+              <Select id="mandate" v-model="allocation.mandateNumberId" required>
+                <option value="">Sélectionner un numéro...</option>
+                <option v-for="m in availableMandates" :key="m.id" :value="m.id">
+                  {{ m.code }}
+                </option>
+              </Select>
+            </div>
+          </div>
+          
+          <div class="flex items-center gap-2">
+            <Button type="submit" :disabled="!allocation.userId || !allocation.mandateNumberId">
+              <CheckCircle class="mr-2 h-4 w-4" />
+              Allouer le numéro
+            </Button>
+            <p v-if="msgAllocate" :class="msgAllocate.includes('Erreur') ? 'text-destructive' : 'text-green-600'" class="text-sm">
+              {{ msgAllocate }}
+            </p>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+
     <!-- UTILISATEURS -->
     <Card>
       <CardHeader>
@@ -69,7 +114,6 @@
         </CardTitle>
       </CardHeader>
       <CardContent class="space-y-4">
-        <!-- Filtres -->
         <div class="flex flex-wrap gap-2">
           <Input
             v-model="usersFilters.q"
@@ -92,7 +136,6 @@
           </Button>
         </div>
 
-        <!-- Table -->
         <div v-if="users.items.length" class="rounded-md border">
           <Table>
             <TableHeader>
@@ -147,7 +190,6 @@
           <p class="text-muted-foreground">Aucun utilisateur trouvé</p>
         </div>
 
-        <!-- Pagination -->
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
             <Button
@@ -188,28 +230,25 @@
         </CardTitle>
       </CardHeader>
       <CardContent class="space-y-4">
-        <!-- Filtres -->
         <div class="flex flex-wrap gap-2">
-  <Input
-    v-model="allocFilters.q"
-    placeholder="Recherche (code / email / nom)"
-    class="max-w-xs"
-  />
-  <Select v-model="allocFilters.status" class="w-40">
-    <option value="">(tous statuts)</option>
-    <option value="ACTIVE">(actives seulement)</option>
-    <option value="RESERVED">RESERVED</option>
-    <option value="DRAFT">DRAFT</option>
-    <option value="SIGNED">SIGNED</option>
-    <option value="RELEASED">RELEASED</option>
-  </Select>
-  <Button @click="refreshAllData">
-    <Search class="mr-2 h-4 w-4" />
-    Rechercher
-  </Button>
-</div>
+          <Input
+            v-model="allocFilters.q"
+            placeholder="Recherche (code / email / nom)"
+            class="max-w-xs"
+          />
+          <Select v-model="allocFilters.status" class="w-40">
+            <option value="">(tous statuts)</option>
+            <option value="RESERVED">RESERVED</option>
+            <option value="DRAFT">DRAFT</option>
+            <option value="SIGNED">SIGNED</option>
+            <option value="RELEASED">RELEASED</option>
+          </Select>
+          <Button @click="loadAllocations">
+            <Search class="mr-2 h-4 w-4" />
+            Rechercher
+          </Button>
+        </div>
 
-        <!-- Table -->
         <div v-if="allocs.items.length" class="rounded-md border">
           <Table>
             <TableHeader>
@@ -240,7 +279,6 @@
                 </TableCell>
                 <TableCell class="text-right">
                   <div class="flex justify-end gap-2 flex-wrap">
-                    <!-- Boutons pour voir les fichiers existants -->
                     <Button
                       v-for="f in a.files"
                       :key="f.id"
@@ -252,9 +290,7 @@
                       {{ f.kind }}
                     </Button>
                     
-                    <!-- Boutons pour uploader des fichiers (seulement si RESERVED ou DRAFT) -->
                     <template v-if="['RESERVED', 'DRAFT'].includes(a.status)">
-                      <!-- Upload Brouillon -->
                       <label 
                         class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-3 cursor-pointer"
                         :class="{ 'opacity-50 pointer-events-none': adminUploading[a.code]?.DRAFT }"
@@ -271,7 +307,6 @@
                         />
                       </label>
                       
-                      <!-- Upload Signé -->
                       <label 
                         class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-8 px-3 cursor-pointer"
                         :class="{ 'opacity-50 pointer-events-none': adminUploading[a.code]?.SIGNED }"
@@ -288,7 +323,6 @@
                         />
                       </label>
                       
-                      <!-- ✅ NOUVEAU: Bouton pour libérer l'allocation -->
                       <Button
                         size="sm"
                         variant="destructive"
@@ -310,7 +344,6 @@
           <p class="text-muted-foreground">Aucune allocation trouvée</p>
         </div>
 
-        <!-- Pagination -->
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
             <Button
@@ -351,38 +384,35 @@
         </CardTitle>
       </CardHeader>
       <CardContent class="space-y-4">
-        <!-- Filtres -->
-<div class="flex flex-wrap gap-2">
-  <Input
-    v-model="mandatesFilters.q"
-    placeholder="Recherche code..."
-    class="max-w-xs"
-  />
-  <Input
-    v-model.number="mandatesFilters.year"
-    type="number"
-    placeholder="Année"
-    class="w-32"
-  />
-  <Select v-model="mandatesFilters.status" class="w-40">
-    <option value="">(tous statuts)</option>
-    <option value="AVAILABLE">AVAILABLE</option>
-    <option value="RESERVED">RESERVED</option>
-    <option value="SIGNED">SIGNED</option>
-  </Select>
-  <Button @click="loadMandates">
-    <Search class="mr-2 h-4 w-4" />
-    Rechercher
-  </Button>
-  
-  <!-- ✅ NOUVEAU BOUTON -->
-  <Button variant="outline" @click="syncMandateStatuses">
-    <RotateCcw class="mr-2 h-4 w-4" />
-    Synchroniser statuts
-  </Button>
-</div>
+        <div class="flex flex-wrap gap-2">
+          <Input
+            v-model="mandatesFilters.q"
+            placeholder="Recherche code..."
+            class="max-w-xs"
+          />
+          <Input
+            v-model.number="mandatesFilters.year"
+            type="number"
+            placeholder="Année"
+            class="w-32"
+          />
+          <Select v-model="mandatesFilters.status" class="w-40">
+            <option value="">(tous statuts)</option>
+            <option value="AVAILABLE">AVAILABLE</option>
+            <option value="RESERVED">RESERVED</option>
+            <option value="SIGNED">SIGNED</option>
+          </Select>
+          <Button @click="loadMandates">
+            <Search class="mr-2 h-4 w-4" />
+            Rechercher
+          </Button>
+          
+          <Button variant="outline" @click="syncMandateStatuses">
+            <RotateCcw class="mr-2 h-4 w-4" />
+            Synchroniser statuts
+          </Button>
+        </div>
 
-        <!-- Table -->
         <div v-if="mandates.items.length" class="rounded-md border">
           <Table>
             <TableHeader>
@@ -395,7 +425,7 @@
               </TableRow>
             </TableHeader>
             <TableBody>
-              <TableRow v-for="m in mandates.items" :key="m.id">
+              <TableRow v-for="m in mandates.items" :key="`${m.id}-${m.status}`">
                 <TableCell>
                   <Input v-model="m.code" class="w-32" />
                 </TableCell>
@@ -406,11 +436,14 @@
                   <Input v-model.number="m.seq" type="number" class="w-24" />
                 </TableCell>
                 <TableCell>
-                  <Select v-model="m.status" class="w-32">
+                  <select 
+                    v-model="m.status" 
+                    class="flex h-9 w-32 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+  >
                     <option value="AVAILABLE">AVAILABLE</option>
                     <option value="RESERVED">RESERVED</option>
                     <option value="SIGNED">SIGNED</option>
-                  </Select>
+                  </select>
                 </TableCell>
                 <TableCell class="text-right">
                   <div class="flex justify-end gap-2">
@@ -437,7 +470,6 @@
           <p class="text-muted-foreground">Aucun numéro trouvé</p>
         </div>
 
-        <!-- Pagination -->
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
             <Button
@@ -472,11 +504,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue'
+import { ref, onMounted, reactive, computed } from 'vue'
 import { api } from '../utils/api'
 import {
   UserPlus, Users, FileText, Hash, Search, Save, Trash2,
-  RotateCcw, Eye, ChevronLeft, ChevronRight, Upload, CheckCircle, Loader2, Unlock
+  RotateCcw, Eye, ChevronLeft, ChevronRight, Upload, CheckCircle, Loader2, Unlock, UserCog
 } from 'lucide-vue-next'
 import Button from '../components/ui/button.vue'
 import Card from '../components/ui/card.vue'
@@ -496,7 +528,6 @@ import TableCell from '../components/ui/table-cell.vue'
 
 type FileKind = 'DRAFT' | 'SIGNED'
 
-/* ---------- Create user ---------- */
 const newUser = ref<{
   firstName?: string
   lastName?: string
@@ -513,12 +544,39 @@ async function createUser() {
     msgCreate.value = 'Utilisateur créé avec succès'
     newUser.value = { email: '', password: '', role: 'AGENT' }
     await loadUsers()
+    await loadAgents()
   } catch {
     msgCreate.value = 'Erreur lors de la création'
   }
 }
 
-/* ---------- Users list ---------- */
+const allocation = ref({
+  userId: '',
+  mandateNumberId: ''
+})
+const msgAllocate = ref('')
+const agents = ref<UserRow[]>([])
+const availableMandates = computed(() => 
+  mandates.value.items.filter(m => m.status === 'AVAILABLE')
+)
+
+async function loadAgents() {
+  const res = await api.get('/admin/users?role=AGENT&active=true&pageSize=200')
+  agents.value = res.items
+}
+
+async function allocateMandate() {
+  msgAllocate.value = ''
+  try {
+    const res = await api.post('/admin/allocate-mandate', allocation.value)
+    msgAllocate.value = `Numéro ${res.code} alloué avec succès`
+    allocation.value = { userId: '', mandateNumberId: '' }
+    await Promise.all([loadAllocations(), loadMandates()])
+  } catch (error: any) {
+    msgAllocate.value = error?.message || 'Erreur lors de l\'allocation'
+  }
+}
+
 type UserRow = {
   id: string
   firstName?: string | null
@@ -557,7 +615,6 @@ async function saveUser(u: UserRow) {
   await loadUsers()
 }
 
-/* ---------- Allocations ---------- */
 type FileRow = { id: string; kind: 'DRAFT' | 'SIGNED'; createdAt?: string }
 type AllocRow = {
   id: string
@@ -574,31 +631,19 @@ type AllocRow = {
   files: FileRow[]
 }
 const allocs = ref({ items: [] as AllocRow[], total: 0, page: 1, pageSize: 50 })
-const allocFilters = ref({ q: '', status: 'ACTIVE' }) // ✅ Par défaut, ne montre que les actives
-
+const allocFilters = ref({ q: '', status: '' })
 const adminUploading = reactive<Record<string, Record<FileKind, boolean>>>({})
 
 async function loadAllocations() {
   const p = new URLSearchParams()
   if (allocFilters.value.q) p.set('q', allocFilters.value.q)
-  
-  // ✅ NOUVEAU: Gérer le filtre "ACTIVE"
-  if (allocFilters.value.status === 'ACTIVE') {
-    p.set('status', 'RESERVED,DRAFT,SIGNED') // Plusieurs statuts
-  } else if (allocFilters.value.status) {
-    p.set('status', allocFilters.value.status)
-  }
-  
+  if (allocFilters.value.status) p.set('status', allocFilters.value.status)
   p.set('page', String(allocs.value.page))
   p.set('pageSize', String(allocs.value.pageSize))
   const res = await api.get(`/admin/mandate-allocations?${p.toString()}`)
   allocs.value.items = res.items
   allocs.value.total = res.total
-}
-
-// ✅ NOUVELLE FONCTION: Rafraîchir toutes les données
-async function refreshAllData() {
-  await Promise.all([loadAllocations(), loadMandates()])
+  await loadMandates()
 }
 
 function fullName(u?: { firstName?: string | null; lastName?: string | null } | null) {
@@ -651,19 +696,17 @@ async function adminFileChosen(e: Event, code: string, kind: FileKind) {
   }
 }
 
-// ✅ NOUVELLE FONCTION: Libérer une allocation
 async function releaseAllocation(alloc: AllocRow) {
-  if (!confirm(`Voulez-vous vraiment libérer l'allocation ${alloc.code} ?\n\nLe numéro sera remis en disponible et l'agent ne pourra plus l'utiliser.`)) {
+  if (!confirm(`Voulez-vous vraiment libérer l'allocation ${alloc.code} ?`)) {
     return
   }
   
   try {
-    // Libérer le numéro (cela met à jour allocation ET numéro automatiquement)
     await api.post(`/admin/mandate-numbers/${alloc.mandateNumberId}/release`)
-    
-    // ✅ FORCER le rafraîchissement des deux tables
-    await refreshAllData()
-    
+    await api.patch(`/admin/mandate-allocations/${alloc.id}`, {
+      status: 'RELEASED'
+    })
+    await loadAllocations()
     alert(`L'allocation ${alloc.code} a été libérée avec succès`)
   } catch (error) {
     console.error('Erreur lors de la libération:', error)
@@ -682,7 +725,6 @@ function getStatusVariant(status: string) {
   return variants[status] || 'default'
 }
 
-/* ---------- Mandate numbers ---------- */
 type MandateRow = {
   id: string
   code: string
@@ -700,9 +742,27 @@ async function loadMandates() {
   if (mandatesFilters.value.status) p.set('status', mandatesFilters.value.status)
   p.set('page', String(mandates.value.page))
   p.set('pageSize', String(mandates.value.pageSize))
+  
+  // Ajouter timestamp pour éviter le cache
+  p.set('_t', String(Date.now()))
+  
   const res = await api.get(`/admin/mandate-numbers?${p.toString()}`)
-  mandates.value.items = res.items
-  mandates.value.total = res.total
+  
+  // ✅ FORCER la réactivité en recréant complètement l'objet
+  mandates.value = {
+    items: res.items.map((item: any) => ({
+      id: item.id,
+      code: item.code,
+      year: item.year,
+      seq: item.seq,
+      status: item.status
+    })),
+    total: res.total,
+    page: mandates.value.page,
+    pageSize: mandates.value.pageSize
+  }
+  
+  console.log('🔄 Mandats rechargés, 460 M 25:', mandates.value.items.find(m => m.code === '460 M 25'))
 }
 
 async function saveMandate(m: MandateRow) {
@@ -716,7 +776,7 @@ async function saveMandate(m: MandateRow) {
 }
 
 async function deleteMandate(m: MandateRow) {
-  if (!confirm('Supprimer ce numéro ? (possible uniquement sans allocations)')) return
+  if (!confirm('Supprimer ce numéro ?')) return
   await api.del(`/admin/mandate-numbers/${m.id}`)
   await loadMandates()
 }
@@ -726,14 +786,10 @@ async function releaseMandate(m: MandateRow) {
   await loadMandates()
 }
 
-// ✅ NOUVELLE FONCTION: Synchroniser les statuts entre numéros et allocations
 async function syncMandateStatuses() {
   try {
     await api.post('/admin/sync-mandate-statuses')
-    
-    // ✅ FORCER le rafraîchissement
-    await refreshAllData()
-    
+    await Promise.all([loadAllocations(), loadMandates()])
     alert('Synchronisation des statuts terminée')
   } catch (error) {
     console.error('Erreur lors de la synchronisation:', error)
@@ -741,9 +797,7 @@ async function syncMandateStatuses() {
   }
 }
 
-
-/* ---------- init ---------- */
 onMounted(async () => {
-  await Promise.all([loadUsers(), loadAllocations(), loadMandates()])
+  await Promise.all([loadUsers(), loadAgents(), loadAllocations(), loadMandates()])
 })
 </script>

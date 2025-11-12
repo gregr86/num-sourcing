@@ -210,7 +210,7 @@ const app = new Elysia()
   )
 
   // --- Mandats: réserver un numéro (format "460 M 25") ---
-  .post('/mandates/reserve', async ({ cookie, set }) => {
+    .post('/mandates/reserve', async ({ cookie, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth) {
       set.status = 401
@@ -252,12 +252,18 @@ const app = new Elysia()
     }
 
     const deadline = dayjs().add(7, 'day').toDate()
-    await prisma.$transaction([
-      prisma.mandateNumber.update({ where: { id: next.id }, data: { status: 'RESERVED' } }),
-      prisma.mandateAllocation.create({
-        data: { mandateNumberId: next.id, userId: auth.id, deadlineAt: deadline, status: 'RESERVED' }
-      })
-    ])
+    
+    // ✅ MODIFICATION: Mettre à jour le statut du numéro à RESERVED
+await prisma.$transaction([
+  prisma.mandateNumber.update({ 
+    where: { id: next.id }, 
+    data: { status: 'RESERVED' }  // ✅ Doit être RESERVED, pas AVAILABLE
+  }),
+  prisma.mandateAllocation.create({
+    data: { mandateNumberId: next.id, userId: auth.id, deadlineAt: deadline, status: 'RESERVED' }
+  })
+])
+    
     return { code: next.code, deadlineAt: deadline }
   })
 
@@ -630,6 +636,78 @@ const app = new Elysia()
     return { ok: true }
   })
 
+  // --- ADMIN: allouer un numéro à un agent ---
+  .post(
+    '/admin/allocate-mandate',
+    async ({ cookie, body, set }) => {
+      const auth = await getUserFromToken(cookie.access_token?.value)
+      if (!auth || auth.role !== 'ADMIN') {
+        set.status = 403
+        return { error: 'Forbidden' }
+      }
+
+      const { userId, mandateNumberId } = body as { userId: string; mandateNumberId: string }
+      
+      // Vérifier que le numéro est disponible
+      const mandate = await prisma.mandateNumber.findUnique({
+        where: { id: mandateNumberId }
+      })
+      
+      if (!mandate) {
+        set.status = 404
+        return { error: 'Mandate number not found' }
+      }
+      
+      if (mandate.status !== 'AVAILABLE') {
+        set.status = 409
+        return { error: 'Mandate number is not available' }
+      }
+      
+      // Vérifier que l'utilisateur existe et est un agent
+      const user = await prisma.user.findUnique({
+        where: { id: userId }
+      })
+      
+      if (!user) {
+        set.status = 404
+        return { error: 'User not found' }
+      }
+      
+      if (user.role !== 'AGENT') {
+        set.status = 400
+        return { error: 'User must be an agent' }
+      }
+
+      const now = new Date()
+      const deadline = dayjs().add(7, 'day').toDate()
+
+      // Créer l'allocation et mettre à jour le statut du numéro
+      await prisma.$transaction([
+        prisma.mandateNumber.update({
+          where: { id: mandateNumberId },
+          data: { status: 'RESERVED' }
+        }),
+        prisma.mandateAllocation.create({
+          data: {
+            mandateNumberId,
+            userId,
+            status: 'RESERVED',
+            deadlineAt: deadline,
+            reservedAt: now
+          }
+        })
+      ])
+
+      return { ok: true, code: mandate.code, deadlineAt: deadline }
+    },
+    {
+      body: t.Object({
+        userId: t.String(),
+        mandateNumberId: t.String()
+      })
+    }
+  )
+
   // --- ADMIN: lister allocations + fichiers + agent ---
 .get('/admin/mandate-allocations', async ({ cookie, query, set }) => {
   const auth = await getUserFromToken(cookie.access_token?.value)
@@ -709,7 +787,7 @@ const app = new Elysia()
   })
 
   // ✅ NOUVELLE ROUTE ELYSIA: Synchroniser les statuts entre numéros et allocations
-  .post('/admin/sync-mandate-statuses', async ({ cookie, set }) => {
+    .post('/admin/sync-mandate-statuses', async ({ cookie, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth || auth.role !== 'ADMIN') {
       set.status = 403
@@ -719,22 +797,20 @@ const app = new Elysia()
     try {
       // Récupérer toutes les allocations actives
       const allocations = await prisma.mandateAllocation.findMany({
-        where: {
-          status: { in: ['RESERVED', 'DRAFT', 'SIGNED'] }
-        },
+        where: { status: { in: ['RESERVED', 'DRAFT', 'SIGNED'] } },
         include: { mandate: true }
       })
       
-      // Mettre à jour le statut des numéros de mandats selon leurs allocations
+      // Mettre à jour le statut des numéros
       for (const alloc of allocations) {
         if (alloc.mandate) {
           let newStatus: 'AVAILABLE' | 'RESERVED' | 'SIGNED' = 'AVAILABLE'
+          if (alloc.status === 'RESERVED' || alloc.status === 'DRAFT') {
+            newStatus = 'RESERVED'
+          } else if (alloc.status === 'SIGNED') {
+            newStatus = 'SIGNED'
+          }
           
-          if (alloc.status === 'RESERVED') newStatus = 'RESERVED'
-          else if (alloc.status === 'DRAFT') newStatus = 'RESERVED'
-          else if (alloc.status === 'SIGNED') newStatus = 'SIGNED'
-          
-          // Mettre à jour le statut du numéro si nécessaire
           if (alloc.mandate.status !== newStatus) {
             await prisma.mandateNumber.update({
               where: { id: alloc.mandate.id },
@@ -744,22 +820,20 @@ const app = new Elysia()
         }
       }
       
-      // Libérer les numéros qui n'ont plus d'allocations actives
+      // Libérer les numéros sans allocations actives
       await prisma.mandateNumber.updateMany({
         where: {
           status: { in: ['RESERVED', 'SIGNED'] },
           allocations: {
-            none: {
-              status: { in: ['RESERVED', 'DRAFT', 'SIGNED'] }
-            }
+            none: { status: { in: ['RESERVED', 'DRAFT', 'SIGNED'] } }
           }
         },
         data: { status: 'AVAILABLE' }
       })
       
-      return { success: true, message: 'Statuts synchronisés avec succès' }
+      return { success: true, message: 'Statuts synchronisés' }
     } catch (error) {
-      console.error('Erreur sync statuts:', error)
+      console.error('Erreur sync:', error)
       set.status = 500
       return { error: 'Erreur lors de la synchronisation' }
     }
