@@ -190,23 +190,24 @@
       <CardContent class="space-y-4">
         <!-- Filtres -->
         <div class="flex flex-wrap gap-2">
-          <Input
-            v-model="allocFilters.q"
-            placeholder="Recherche (code / email / nom)"
-            class="max-w-xs"
-          />
-          <Select v-model="allocFilters.status" class="w-40">
-            <option value="">(tous statuts)</option>
-            <option value="RESERVED">RESERVED</option>
-            <option value="DRAFT">DRAFT</option>
-            <option value="SIGNED">SIGNED</option>
-            <option value="RELEASED">RELEASED</option>
-          </Select>
-          <Button @click="loadAllocations">
-            <Search class="mr-2 h-4 w-4" />
-            Rechercher
-          </Button>
-        </div>
+  <Input
+    v-model="allocFilters.q"
+    placeholder="Recherche (code / email / nom)"
+    class="max-w-xs"
+  />
+  <Select v-model="allocFilters.status" class="w-40">
+    <option value="">(tous statuts)</option>
+    <option value="ACTIVE">(actives seulement)</option>
+    <option value="RESERVED">RESERVED</option>
+    <option value="DRAFT">DRAFT</option>
+    <option value="SIGNED">SIGNED</option>
+    <option value="RELEASED">RELEASED</option>
+  </Select>
+  <Button @click="refreshAllData">
+    <Search class="mr-2 h-4 w-4" />
+    Rechercher
+  </Button>
+</div>
 
         <!-- Table -->
         <div v-if="allocs.items.length" class="rounded-md border">
@@ -573,21 +574,31 @@ type AllocRow = {
   files: FileRow[]
 }
 const allocs = ref({ items: [] as AllocRow[], total: 0, page: 1, pageSize: 50 })
-const allocFilters = ref({ q: '', status: '' })
+const allocFilters = ref({ q: '', status: 'ACTIVE' }) // ✅ Par défaut, ne montre que les actives
+
 const adminUploading = reactive<Record<string, Record<FileKind, boolean>>>({})
 
 async function loadAllocations() {
   const p = new URLSearchParams()
   if (allocFilters.value.q) p.set('q', allocFilters.value.q)
-  if (allocFilters.value.status) p.set('status', allocFilters.value.status)
+  
+  // ✅ NOUVEAU: Gérer le filtre "ACTIVE"
+  if (allocFilters.value.status === 'ACTIVE') {
+    p.set('status', 'RESERVED,DRAFT,SIGNED') // Plusieurs statuts
+  } else if (allocFilters.value.status) {
+    p.set('status', allocFilters.value.status)
+  }
+  
   p.set('page', String(allocs.value.page))
   p.set('pageSize', String(allocs.value.pageSize))
   const res = await api.get(`/admin/mandate-allocations?${p.toString()}`)
   allocs.value.items = res.items
   allocs.value.total = res.total
-  
-  // ✅ NOUVEAU: Recharger aussi les numéros pour voir les changements de statut
-  await loadMandates()
+}
+
+// ✅ NOUVELLE FONCTION: Rafraîchir toutes les données
+async function refreshAllData() {
+  await Promise.all([loadAllocations(), loadMandates()])
 }
 
 function fullName(u?: { firstName?: string | null; lastName?: string | null } | null) {
@@ -647,18 +658,12 @@ async function releaseAllocation(alloc: AllocRow) {
   }
   
   try {
-    // Utiliser la route existante pour libérer le numéro
+    // Libérer le numéro (cela met à jour allocation ET numéro automatiquement)
     await api.post(`/admin/mandate-numbers/${alloc.mandateNumberId}/release`)
     
-    // ✅ NOUVEAU: Mettre à jour explicitement le statut de l'allocation en RELEASED
-    await api.patch(`/admin/mandate-allocations/${alloc.id}`, {
-      status: 'RELEASED'
-    })
-
-    // Recharger les allocations pour voir le changement
-    await loadAllocations()
+    // ✅ FORCER le rafraîchissement des deux tables
+    await refreshAllData()
     
-    // Optionnel: afficher un message de succès
     alert(`L'allocation ${alloc.code} a été libérée avec succès`)
   } catch (error) {
     console.error('Erreur lors de la libération:', error)
@@ -724,11 +729,10 @@ async function releaseMandate(m: MandateRow) {
 // ✅ NOUVELLE FONCTION: Synchroniser les statuts entre numéros et allocations
 async function syncMandateStatuses() {
   try {
-    // Appeler une nouvelle route backend pour synchroniser les statuts
     await api.post('/admin/sync-mandate-statuses')
     
-    // Recharger toutes les données
-    await Promise.all([loadAllocations(), loadMandates()])
+    // ✅ FORCER le rafraîchissement
+    await refreshAllData()
     
     alert('Synchronisation des statuts terminée')
   } catch (error) {

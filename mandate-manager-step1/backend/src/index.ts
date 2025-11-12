@@ -5,7 +5,8 @@ import { cors } from '@elysiajs/cors'
 import dayjs from 'dayjs'
 import { prisma } from './prisma'
 import { issueAccessToken, verifyPassword, getUserFromToken, normalizeEmail, hashPassword } from './auth'
-import { ensureBucket, presignedPut } from './storage'
+import { ensureBucket, presignedPut, presignedGet, saveFile, getFile } from './storage'
+import path from 'path'
 import { runCronOnce } from './cron'
 
 const PORT = Number(process.env.PORT ?? 3001)
@@ -593,26 +594,26 @@ const app = new Elysia()
 
   // --- ADMIN: remettre un numéro en disponible (release) ---
   .post('/admin/mandate-numbers/:id/release', async ({ cookie, params, set }) => {
-    const auth = await getUserFromToken(cookie.access_token?.value)
-    if (!auth || auth.role !== 'ADMIN') {
-      set.status = 403
-      return { error: 'Forbidden' }
-    }
+  const auth = await getUserFromToken(cookie.access_token?.value)
+  if (!auth || auth.role !== 'ADMIN') {
+    set.status = 403
+    return { error: 'Forbidden' }
+  }
 
-    const active = await prisma.mandateAllocation.findFirst({
-      where: { mandateNumberId: params.id, status: { in: ['RESERVED', 'DRAFT'] } }
-    })
-    if (!active) {
-      set.status = 404
-      return { error: 'No active allocation' }
-    }
-
-    await prisma.$transaction([
-      prisma.mandateAllocation.update({ where: { id: active.id }, data: { status: 'RELEASED', releasedAt: new Date() } }),
-      prisma.mandateNumber.update({ where: { id: params.id }, data: { status: 'AVAILABLE' } })
-    ])
-    return { ok: true }
+  const active = await prisma.mandateAllocation.findFirst({
+    where: { mandateNumberId: params.id, status: { in: ['RESERVED', 'DRAFT'] } }
   })
+  if (!active) {
+    set.status = 404
+    return { error: 'No active allocation' }
+  }
+
+  await prisma.$transaction([
+    prisma.mandateAllocation.update({ where: { id: active.id }, data: { status: 'RELEASED', releasedAt: new Date() } }),
+    prisma.mandateNumber.update({ where: { id: params.id }, data: { status: 'AVAILABLE' } })
+  ])
+  return { ok: true }
+})
 
   // --- ADMIN: exécuter la cron manuellement (tests) ---
   .post('/admin/cron-run', async ({ cookie, set }) => {
@@ -630,57 +631,65 @@ const app = new Elysia()
   })
 
   // --- ADMIN: lister allocations + fichiers + agent ---
-  .get('/admin/mandate-allocations', async ({ cookie, query, set }) => {
-    const auth = await getUserFromToken(cookie.access_token?.value)
-    if (!auth || auth.role !== 'ADMIN') {
-      set.status = 403
-      return { error: 'Forbidden' }
+.get('/admin/mandate-allocations', async ({ cookie, query, set }) => {
+  const auth = await getUserFromToken(cookie.access_token?.value)
+  if (!auth || auth.role !== 'ADMIN') {
+    set.status = 403
+    return { error: 'Forbidden' }
+  }
+
+  const page = Math.max(1, Number((query as any).page ?? 1))
+  const pageSize = Math.min(200, Math.max(1, Number((query as any).pageSize ?? 50)))
+  const status = (query as any).status as 'RESERVED' | 'DRAFT' | 'SIGNED' | 'RELEASED' | undefined
+  const q = (query as any).q as string | undefined
+  const userId = (query as any).userId as string | undefined
+
+  const where: any = {}
+  if (status) {
+    // ✅ NOUVEAU: Gérer les statuts multiples séparés par virgule
+    if (status.includes(',')) {
+      where.status = { in: status.split(',') }
+    } else {
+      where.status = status
     }
+  }
+  if (userId) where.userId = userId
+  if (q) {
+    where.OR = [
+      { mandate: { code: { contains: q } } },
+      { user: { email: { contains: q, mode: 'insensitive' } } },
+      { user: { firstName: { contains: q, mode: 'insensitive' } } },
+      { user: { lastName: { contains: q, mode: 'insensitive' } } }
+    ]
+  } // ✅ ACCOLADE FERMANTE AJOUTÉE ICI !
 
-    const page = Math.max(1, Number((query as any).page ?? 1))
-    const pageSize = Math.min(200, Math.max(1, Number((query as any).pageSize ?? 50)))
-    const status = (query as any).status as 'RESERVED' | 'DRAFT' | 'SIGNED' | 'RELEASED' | undefined
-    const q = (query as any).q as string | undefined
-    const userId = (query as any).userId as string | undefined
+  const [total, rows] = await Promise.all([
+    prisma.mandateAllocation.count({ where }),
+    prisma.mandateAllocation.findMany({
+      where,
+      include: { user: true, mandate: true, files: true },
+      orderBy: [{ reservedAt: 'desc' }],
+      skip: (page - 1) * pageSize,
+      take: pageSize
+    })
+  ])
 
-    const where: any = {}
-    if (status) where.status = status
-    if (userId) where.userId = userId
-    if (q) {
-      where.OR = [
-        { mandate: { code: { contains: q } } },
-        { user: { email: { contains: q, mode: 'insensitive' } } },
-        { user: { firstName: { contains: q, mode: 'insensitive' } } },
-        { user: { lastName: { contains: q, mode: 'insensitive' } } }
-      ]
-    }
+  const items = rows.map((r) => ({
+    id: r.id,
+    code: r.mandate?.code,
+    mandateNumberId: r.mandateNumberId,
+    status: r.status,
+    deadlineAt: r.deadlineAt,
+    reservedAt: r.reservedAt,
+    user: r.user
+      ? { id: r.user.id, email: r.user.email, firstName: r.user.firstName, lastName: r.user.lastName }
+      : null,
+    files: r.files.map((f) => ({ id: f.id, kind: f.kind, createdAt: f.createdAt }))
+  }))
 
-    const [total, rows] = await Promise.all([
-      prisma.mandateAllocation.count({ where }),
-      prisma.mandateAllocation.findMany({
-        where,
-        include: { user: true, mandate: true, files: true },
-        orderBy: [{ reservedAt: 'desc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize
-      })
-    ])
+  return { total, page, pageSize, items }
+})
 
-    const items = rows.map((r) => ({
-      id: r.id,
-      code: r.mandate?.code,
-      mandateNumberId: r.mandateNumberId,
-      status: r.status,
-      deadlineAt: r.deadlineAt,
-      reservedAt: r.reservedAt,
-      user: r.user
-        ? { id: r.user.id, email: r.user.email, firstName: r.user.firstName, lastName: r.user.lastName }
-        : null,
-      files: r.files.map((f) => ({ id: f.id, kind: f.kind, createdAt: f.createdAt }))
-    }))
-
-    return { total, page, pageSize, items }
-  })
 
   // --- ADMIN: URL GET pré-signée pour n'importe quel fichier ---
   .get('/admin/files/:id/url', async ({ cookie, params, set }) => {
@@ -810,6 +819,48 @@ const app = new Elysia()
       ])
     })
   })
+
+// --- STORAGE: Upload de fichiers ---
+.put('/storage/upload/:token', async ({ params, request, query, set }) => {
+  try {
+    const key = (query as any).key
+    if (!key) {
+      set.status = 400
+      return { error: 'Missing key parameter' }
+    }
+
+    // Lire le corps de la requête comme buffer
+    const buffer = Buffer.from(await request.arrayBuffer())
+    
+    // Sauvegarder le fichier
+    await saveFile(key, buffer)
+    
+    return { ok: true }
+  } catch (error) {
+    console.error('Erreur upload:', error)
+    set.status = 500
+    return { error: 'Upload failed' }
+  }
+})
+
+// --- STORAGE: Téléchargement de fichiers ---
+.get('/storage/download/:key', async ({ params, set }) => {
+  try {
+    const key = decodeURIComponent(params.key)
+    const buffer = await getFile(key)
+    
+    return new Response(buffer, {
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `inline; filename="${path.basename(key)}"`,
+      }
+    })
+  } catch (error) {
+    console.error('Erreur download:', error)
+    set.status = 404
+    return { error: 'File not found' }
+  }
+})
 
 // ----- BOOTSTRAP & START -----
 async function ensureBootstrapAdmin() {
