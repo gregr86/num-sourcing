@@ -1,0 +1,30 @@
+# Redémarrer avec hot reload
+bun run dev
+
+# Build production
+bun run build
+
+# Générer le client Prisma après modif du schema
+bunx prisma generate
+
+# Créer une nouvelle migration
+bunx prisma migrate dev --name nom_migration
+
+# Reset complet de la DB
+bunx prisma migrate reset
+
+# Re-seed
+bun run seed
+
+# Dev avec hot reload
+npm run dev
+
+# Build production
+npm run build
+
+# Preview du build
+npm run preview
+
+cd mandate-manager-step1
+docker-compose down -v  # Nettoyer
+docker-compose up --build  # Tout relancer

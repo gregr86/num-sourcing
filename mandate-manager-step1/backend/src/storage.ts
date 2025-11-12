@@ -1,43 +1,53 @@
 // backend/src/storage.ts
-import { S3Client, HeadBucketCommand, CreateBucketCommand, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { mkdir, writeFile, readFile } from 'fs/promises'
+import { existsSync } from 'fs'
+import path from 'path'
+import crypto from 'crypto'
 
-// ... (tes clients s3Internal / s3Public comme tu les as maintenant)
-
-export async function presignedGet(key: string, expiresIn = 600) {
-  const cmd = new GetObjectCommand({ Bucket: process.env.S3_BUCKET!, Key: key })
-  return getSignedUrl(s3Public, cmd, { expiresIn })
-}
-
-const internalEndpoint = process.env.S3_ENDPOINT!          // ex: http://minio:9000 (réseau Docker)
-const publicEndpoint   = process.env.PUBLIC_S3_ENDPOINT || internalEndpoint // ex: http://localhost:9000 (depuis l'hôte)
-const bucket = process.env.S3_BUCKET!
-const accessKeyId = process.env.S3_ACCESS_KEY!
-const secretAccessKey = process.env.S3_SECRET_KEY!
-
-// client interne pour parler à MinIO depuis le backend
-const s3Internal = new S3Client({
-  region: 'eu-west-1',
-  endpoint: internalEndpoint,
-  forcePathStyle: true,
-  credentials: { accessKeyId, secretAccessKey }
-})
-
-// client "public" uniquement pour SIGNER les URLs avec l'host public
-const s3Public = new S3Client({
-  region: 'eu-west-1',
-  endpoint: publicEndpoint,
-  forcePathStyle: true,
-  credentials: { accessKeyId, secretAccessKey }
-})
+// Dossier de stockage local
+const STORAGE_DIR = process.env.STORAGE_DIR || path.join(process.cwd(), 'storage')
 
 export async function ensureBucket() {
-  try { await s3Internal.send(new HeadBucketCommand({ Bucket: bucket })) }
-  catch { await s3Internal.send(new CreateBucketCommand({ Bucket: bucket })) }
+  // Créer le dossier de stockage s'il n'existe pas
+  if (!existsSync(STORAGE_DIR)) {
+    await mkdir(STORAGE_DIR, { recursive: true })
+    console.log('📁 Dossier de stockage créé:', STORAGE_DIR)
+  }
 }
 
 export async function presignedPut(key: string, contentType: string) {
-  const cmd = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType })
-  // on signe avec l'endpoint public -> l’URL renvoyée contiendra localhost:9000 et sera directement utilisable depuis ta machine et le navigateur
-  return getSignedUrl(s3Public, cmd, { expiresIn: 600 })
+  // Générer un token unique pour l'upload
+  const uploadToken = crypto.randomBytes(32).toString('hex')
+  
+  // Retourner l'URL d'upload (qui sera traitée par notre endpoint)
+  return `/api/storage/upload/${uploadToken}?key=${encodeURIComponent(key)}`
+}
+
+export async function presignedGet(key: string, expiresIn = 600) {
+  // Retourner l'URL de téléchargement (qui sera traitée par notre endpoint)
+  return `/api/storage/download/${encodeURIComponent(key)}`
+}
+
+export async function saveFile(key: string, buffer: Buffer) {
+  // Créer le chemin complet du fichier
+  const filePath = path.join(STORAGE_DIR, key)
+  
+  // Créer les sous-dossiers si nécessaire
+  const dir = path.dirname(filePath)
+  if (!existsSync(dir)) {
+    await mkdir(dir, { recursive: true })
+  }
+  
+  // Sauvegarder le fichier
+  await writeFile(filePath, buffer)
+  console.log('💾 Fichier sauvegardé:', key)
+}
+
+export async function getFile(key: string): Promise<Buffer> {
+  const filePath = path.join(STORAGE_DIR, key)
+  return await readFile(filePath)
+}
+
+export function getFilePath(key: string): string {
+  return path.join(STORAGE_DIR, key)
 }
