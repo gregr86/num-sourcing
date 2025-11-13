@@ -1,4 +1,4 @@
-// backend/prisma/schema.prisma
+// backend/prisma/schema.prisma - VERSION MISE À JOUR
 generator client {
   provider = "prisma-client-js"
 }
@@ -41,6 +41,8 @@ model User {
   lastName    String?
   createdAt   DateTime            @default(now())
   allocations MandateAllocation[]
+  newsletters Newsletter[]
+  resetTokens PasswordResetToken[]
 }
 
 model MandateNumber {
@@ -81,4 +83,30 @@ model MandateFile {
   sha256       String
 
   allocation MandateAllocation @relation(fields: [allocationId], references: [id])
+}
+
+model Newsletter {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  storageKey  String
+  createdAt   DateTime @default(now())
+  publishedBy String
+
+  publisher User @relation(fields: [publishedBy], references: [id])
+
+  @@index([createdAt])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([token, expiresAt])
 }

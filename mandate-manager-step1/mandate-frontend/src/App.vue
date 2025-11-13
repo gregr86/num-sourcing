@@ -26,6 +26,16 @@
           
           <RouterLink 
             v-if="me?.role === 'ADMIN'"
+            to="/admin/newsletters"
+          >
+            <Button variant="ghost">
+              <FileText class="mr-2 h-4 w-4" />
+              Newsletters
+            </Button>
+          </RouterLink>
+
+          <RouterLink 
+            v-if="me?.role === 'ADMIN'"
             to="/admin"
           >
             <Button variant="ghost">
@@ -45,6 +55,16 @@
             <LogOut class="mr-2 h-4 w-4" />
             Déconnexion
           </Button>
+
+          <RouterLink 
+            v-if="me?.role === 'AGENT'"
+            to="/newsletters"
+          >
+            <Button variant="ghost">
+              <FileText class="mr-2 h-4 w-4" />
+              Newsletters
+            </Button>
+          </RouterLink>
         </nav>
       </div>
     </header>

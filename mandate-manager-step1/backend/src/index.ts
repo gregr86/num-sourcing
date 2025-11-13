@@ -3,11 +3,13 @@ import { Elysia, t } from 'elysia'
 import { cookie } from '@elysiajs/cookie'
 import { cors } from '@elysiajs/cors'
 import dayjs from 'dayjs'
+import crypto from 'crypto'
 import { prisma } from './prisma'
 import { issueAccessToken, verifyPassword, getUserFromToken, normalizeEmail, hashPassword } from './auth'
 import { ensureBucket, presignedPut, presignedGet, saveFile, getFile } from './storage'
+import { sendAccountCreationEmail, sendPasswordResetEmail } from './email-templates'
 import path from 'path'
-import { runCronOnce } from './cron'
+import './cron-enhanced'
 
 const PORT = Number(process.env.PORT ?? 3001)
 
@@ -27,7 +29,6 @@ const app = new Elysia()
 
       console.log('🔐 Tentative de connexion:', e)
 
-      // recherche insensible à la casse
       const user = await prisma.user.findFirst({
         where: { email: { equals: e, mode: 'insensitive' } }
       })
@@ -56,7 +57,7 @@ const app = new Elysia()
         sameSite: 'lax',
         secure: false,
         path: '/',
-        maxAge: 60 * 60 * 24 * 30 // 30 jours
+        maxAge: 60 * 60 * 24 * 30
       })
       
       console.log('✅ Connexion réussie pour:', user.email, '- Rôle:', user.role)
@@ -90,6 +91,109 @@ const app = new Elysia()
       maxAge: 0
     })
     return { ok: true }
+  })
+
+  // --- AUTH: request password reset ---
+  .post(
+    '/auth/request-reset',
+    async ({ body, set }) => {
+      const { email } = body as { email: string }
+      if (!email) {
+        set.status = 400
+        return { error: 'Email required' }
+      }
+
+      const user = await prisma.user.findFirst({
+        where: { email: { equals: normalizeEmail(email), mode: 'insensitive' } }
+      })
+
+      if (!user) {
+        return { ok: true, message: 'If the email exists, a reset link has been sent' }
+      }
+
+      const token = crypto.randomBytes(32).toString('hex')
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24h
+      
+      await prisma.passwordResetToken.create({
+        data: { userId: user.id, token, expiresAt }
+      })
+
+      await sendPasswordResetEmail(user.email, user.firstName, token)
+
+      return { ok: true, message: 'Reset link sent' }
+    },
+    { body: t.Object({ email: t.String() }) }
+  )
+
+  // --- AUTH: reset password with token ---
+  .post(
+    '/auth/reset-password',
+    async ({ body, set }) => {
+      const { token, newPassword } = body as { token: string; newPassword: string }
+      
+      if (!token || !newPassword) {
+        set.status = 400
+        return { error: 'Token and password required' }
+      }
+
+      const resetToken = await prisma.passwordResetToken.findUnique({
+        where: { token },
+        include: { user: true }
+      })
+
+      if (!resetToken || resetToken.used || resetToken.expiresAt < new Date()) {
+        set.status = 400
+        return { error: 'Invalid or expired token' }
+      }
+
+      await prisma.user.update({
+        where: { id: resetToken.userId },
+        data: {
+          password: await hashPassword(newPassword),
+          active: true
+        }
+      })
+
+      await prisma.passwordResetToken.update({
+        where: { id: resetToken.id },
+        data: { used: true }
+      })
+
+      return { ok: true }
+    },
+    { body: t.Object({ token: t.String(), newPassword: t.String() }) }
+  )
+
+  // --- AUTH: check reset token ---
+  .get('/auth/check-reset-token', async ({ query, set }) => {
+    const { token } = query as { token: string }
+    
+    if (!token) {
+      set.status = 400
+      return { valid: false, error: 'Token required' }
+    }
+
+    const resetToken = await prisma.passwordResetToken.findUnique({
+      where: { token },
+      include: {
+        user: {
+          select: { email: true, firstName: true, lastName: true }
+        }
+      }
+    })
+
+    if (!resetToken || resetToken.used || resetToken.expiresAt < new Date()) {
+      return { valid: false }
+    }
+
+    return {
+      valid: true,
+      user: {
+        email: resetToken.user.email,
+        firstName: resetToken.user.firstName,
+        lastName: resetToken.user.lastName
+      }
+    }
   })
 
   // --- ACCOUNT: update email ---
@@ -171,7 +275,7 @@ const app = new Elysia()
     { body: t.Object({ currentPassword: t.String(), newPassword: t.String() }) }
   )
 
-  // --- ACCOUNT: update profile (firstName, lastName) ---
+  // --- ACCOUNT: update profile ---
   .patch(
     '/account/update-profile',
     async ({ cookie, body, set }) => {
@@ -209,8 +313,8 @@ const app = new Elysia()
     }) }
   )
 
-  // --- Mandats: réserver un numéro (format "460 M 25") ---
-    .post('/mandates/reserve', async ({ cookie, set }) => {
+  // --- MANDATES: reserve ---
+  .post('/mandates/reserve', async ({ cookie, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth) {
       set.status = 401
@@ -253,21 +357,20 @@ const app = new Elysia()
 
     const deadline = dayjs().add(7, 'day').toDate()
     
-    // ✅ MODIFICATION: Mettre à jour le statut du numéro à RESERVED
-await prisma.$transaction([
-  prisma.mandateNumber.update({ 
-    where: { id: next.id }, 
-    data: { status: 'RESERVED' }  // ✅ Doit être RESERVED, pas AVAILABLE
-  }),
-  prisma.mandateAllocation.create({
-    data: { mandateNumberId: next.id, userId: auth.id, deadlineAt: deadline, status: 'RESERVED' }
-  })
-])
+    await prisma.$transaction([
+      prisma.mandateNumber.update({ 
+        where: { id: next.id }, 
+        data: { status: 'RESERVED' }
+      }),
+      prisma.mandateAllocation.create({
+        data: { mandateNumberId: next.id, userId: auth.id, deadlineAt: deadline, status: 'RESERVED' }
+      })
+    ])
     
     return { code: next.code, deadlineAt: deadline }
   })
 
-  // --- Mandats: URL pré-signée pour upload PDF ---
+  // --- MANDATES: upload URL ---
   .post(
     '/mandates/:code/upload-url',
     async ({ cookie, params, body, set }) => {
@@ -304,7 +407,7 @@ await prisma.$transaction([
     { body: t.Object({ kind: t.Union([t.Literal('DRAFT'), t.Literal('SIGNED')]) }) }
   )
 
-  // --- Lister MES mandats ---
+  // --- MANDATES: my list ---
   .get('/mandates/my', async ({ cookie, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth) {
@@ -326,7 +429,7 @@ await prisma.$transaction([
     return { items }
   })
 
-  // --- Obtenir mes fichiers pour un code ---
+  // --- MANDATES: files for code ---
   .get('/mandates/:code/files', async ({ cookie, params, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth) {
@@ -344,7 +447,7 @@ await prisma.$transaction([
     return { files: alloc.files }
   })
 
-  // --- URL GET pré-signée (mes fichiers) ---
+  // --- MANDATES: file download URL ---
   .get('/mandates/:code/files/:id/url', async ({ cookie, params, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth) {
@@ -358,12 +461,61 @@ await prisma.$transaction([
       set.status = 404
       return { error: 'File not found' }
     }
-    const { presignedGet } = await import('./storage')
     const url = await presignedGet(file.storageKey, 600)
     return { url }
   })
 
-  // --- ADMIN: emergency password reset (protégé) ---
+  // --- NEWSLETTERS: list (agent) ---
+  .get('/newsletters', async ({ cookie, query, set }) => {
+    const auth = await getUserFromToken(cookie.access_token?.value)
+    if (!auth) {
+      set.status = 401
+      return { error: 'Unauthenticated' }
+    }
+
+    const page = Math.max(1, Number((query as any).page ?? 1))
+    const pageSize = Math.min(50, Math.max(1, Number((query as any).pageSize ?? 20)))
+
+    const [total, items] = await Promise.all([
+      prisma.newsletter.count(),
+      prisma.newsletter.findMany({
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          createdAt: true
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize
+      })
+    ])
+
+    return { total, page, pageSize, items }
+  })
+
+  // --- NEWSLETTERS: download ---
+  .get('/newsletters/:id/download', async ({ cookie, params, set }) => {
+    const auth = await getUserFromToken(cookie.access_token?.value)
+    if (!auth) {
+      set.status = 401
+      return { error: 'Unauthenticated' }
+    }
+
+    const newsletter = await prisma.newsletter.findUnique({
+      where: { id: params.id }
+    })
+
+    if (!newsletter) {
+      set.status = 404
+      return { error: 'Newsletter not found' }
+    }
+
+    const url = await presignedGet(newsletter.storageKey, 600)
+    return { url }
+  })
+
+  // --- ADMIN: emergency password reset ---
   .post(
     '/admin/emergency-reset',
     async ({ headers, body, set }) => {
@@ -383,7 +535,7 @@ await prisma.$transaction([
     { body: t.Object({ email: t.String(), newPassword: t.String() }) }
   )
 
-  // --- ADMIN: créer un utilisateur ---
+  // --- ADMIN: create user ---
   .post(
     '/admin/users',
     async ({ cookie, body, set }) => {
@@ -403,6 +555,17 @@ await prisma.$transaction([
       const user = await prisma.user.create({
         data: { email: e, password: await hashPassword(password), role, firstName, lastName, active: true }
       })
+
+      // Générer un token de reset et envoyer l'email
+      const token = crypto.randomBytes(32).toString('hex')
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 jours
+
+      await prisma.passwordResetToken.create({
+        data: { userId: user.id, token, expiresAt }
+      })
+
+      await sendAccountCreationEmail(user.email, user.firstName, token)
+
       return {
         id: user.id,
         email: user.email,
@@ -423,7 +586,7 @@ await prisma.$transaction([
     }
   )
 
-  // --- ADMIN: liste utilisateurs ---
+  // --- ADMIN: list users ---
   .get('/admin/users', async ({ cookie, query, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth || auth.role !== 'ADMIN') {
@@ -461,7 +624,7 @@ await prisma.$transaction([
     return { total, page, pageSize, items }
   })
 
-  // --- ADMIN: modifier utilisateur ---
+  // --- ADMIN: update user ---
   .patch(
     '/admin/users/:id',
     async ({ cookie, params, body, set }) => {
@@ -511,7 +674,7 @@ await prisma.$transaction([
     }
   )
 
-  // --- ADMIN: lister numéros de mandat ---
+  // --- ADMIN: list mandate numbers ---
   .get('/admin/mandate-numbers', async ({ cookie, query, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth || auth.role !== 'ADMIN') {
@@ -543,7 +706,7 @@ await prisma.$transaction([
     return { total, page, pageSize, items }
   })
 
-  // --- ADMIN: modifier numéro ---
+  // --- ADMIN: update mandate number ---
   .patch(
     '/admin/mandate-numbers/:id',
     async ({ cookie, params, body, set }) => {
@@ -580,7 +743,7 @@ await prisma.$transaction([
     }
   )
 
-  // --- ADMIN: supprimer numéro (sans allocations) ---
+  // --- ADMIN: delete mandate number ---
   .delete('/admin/mandate-numbers/:id', async ({ cookie, params, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth || auth.role !== 'ADMIN') {
@@ -598,30 +761,30 @@ await prisma.$transaction([
     return { ok: true }
   })
 
-  // --- ADMIN: remettre un numéro en disponible (release) ---
+  // --- ADMIN: release mandate number ---
   .post('/admin/mandate-numbers/:id/release', async ({ cookie, params, set }) => {
-  const auth = await getUserFromToken(cookie.access_token?.value)
-  if (!auth || auth.role !== 'ADMIN') {
-    set.status = 403
-    return { error: 'Forbidden' }
-  }
+    const auth = await getUserFromToken(cookie.access_token?.value)
+    if (!auth || auth.role !== 'ADMIN') {
+      set.status = 403
+      return { error: 'Forbidden' }
+    }
 
-  const active = await prisma.mandateAllocation.findFirst({
-    where: { mandateNumberId: params.id, status: { in: ['RESERVED', 'DRAFT'] } }
+    const active = await prisma.mandateAllocation.findFirst({
+      where: { mandateNumberId: params.id, status: { in: ['RESERVED', 'DRAFT'] } }
+    })
+    if (!active) {
+      set.status = 404
+      return { error: 'No active allocation' }
+    }
+
+    await prisma.$transaction([
+      prisma.mandateAllocation.update({ where: { id: active.id }, data: { status: 'RELEASED', releasedAt: new Date() } }),
+      prisma.mandateNumber.update({ where: { id: params.id }, data: { status: 'AVAILABLE' } })
+    ])
+    return { ok: true }
   })
-  if (!active) {
-    set.status = 404
-    return { error: 'No active allocation' }
-  }
 
-  await prisma.$transaction([
-    prisma.mandateAllocation.update({ where: { id: active.id }, data: { status: 'RELEASED', releasedAt: new Date() } }),
-    prisma.mandateNumber.update({ where: { id: params.id }, data: { status: 'AVAILABLE' } })
-  ])
-  return { ok: true }
-})
-
-  // --- ADMIN: exécuter la cron manuellement (tests) ---
+  // --- ADMIN: run cron manually ---
   .post('/admin/cron-run', async ({ cookie, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth) {
@@ -632,11 +795,12 @@ await prisma.$transaction([
       set.status = 403
       return { error: 'Forbidden' }
     }
+    const { runCronOnce } = await import('./cron-enhanced')
     await runCronOnce()
     return { ok: true }
   })
 
-  // --- ADMIN: allouer un numéro à un agent ---
+  // --- ADMIN: allocate mandate ---
   .post(
     '/admin/allocate-mandate',
     async ({ cookie, body, set }) => {
@@ -648,7 +812,6 @@ await prisma.$transaction([
 
       const { userId, mandateNumberId } = body as { userId: string; mandateNumberId: string }
       
-      // Vérifier que le numéro est disponible
       const mandate = await prisma.mandateNumber.findUnique({
         where: { id: mandateNumberId }
       })
@@ -663,7 +826,6 @@ await prisma.$transaction([
         return { error: 'Mandate number is not available' }
       }
       
-      // Vérifier que l'utilisateur existe et est un agent
       const user = await prisma.user.findUnique({
         where: { id: userId }
       })
@@ -681,7 +843,6 @@ await prisma.$transaction([
       const now = new Date()
       const deadline = dayjs().add(7, 'day').toDate()
 
-      // Créer l'allocation et mettre à jour le statut du numéro
       await prisma.$transaction([
         prisma.mandateNumber.update({
           where: { id: mandateNumberId },
@@ -708,68 +869,66 @@ await prisma.$transaction([
     }
   )
 
-  // --- ADMIN: lister allocations + fichiers + agent ---
-.get('/admin/mandate-allocations', async ({ cookie, query, set }) => {
-  const auth = await getUserFromToken(cookie.access_token?.value)
-  if (!auth || auth.role !== 'ADMIN') {
-    set.status = 403
-    return { error: 'Forbidden' }
-  }
-
-  const page = Math.max(1, Number((query as any).page ?? 1))
-  const pageSize = Math.min(200, Math.max(1, Number((query as any).pageSize ?? 50)))
-  const status = (query as any).status as 'RESERVED' | 'DRAFT' | 'SIGNED' | 'RELEASED' | undefined
-  const q = (query as any).q as string | undefined
-  const userId = (query as any).userId as string | undefined
-
-  const where: any = {}
-  if (status) {
-    // ✅ NOUVEAU: Gérer les statuts multiples séparés par virgule
-    if (status.includes(',')) {
-      where.status = { in: status.split(',') }
-    } else {
-      where.status = status
+  // --- ADMIN: list allocations ---
+  .get('/admin/mandate-allocations', async ({ cookie, query, set }) => {
+    const auth = await getUserFromToken(cookie.access_token?.value)
+    if (!auth || auth.role !== 'ADMIN') {
+      set.status = 403
+      return { error: 'Forbidden' }
     }
-  }
-  if (userId) where.userId = userId
-  if (q) {
-    where.OR = [
-      { mandate: { code: { contains: q } } },
-      { user: { email: { contains: q, mode: 'insensitive' } } },
-      { user: { firstName: { contains: q, mode: 'insensitive' } } },
-      { user: { lastName: { contains: q, mode: 'insensitive' } } }
-    ]
-  } // ✅ ACCOLADE FERMANTE AJOUTÉE ICI !
 
-  const [total, rows] = await Promise.all([
-    prisma.mandateAllocation.count({ where }),
-    prisma.mandateAllocation.findMany({
-      where,
-      include: { user: true, mandate: true, files: true },
-      orderBy: [{ reservedAt: 'desc' }],
-      skip: (page - 1) * pageSize,
-      take: pageSize
-    })
-  ])
+    const page = Math.max(1, Number((query as any).page ?? 1))
+    const pageSize = Math.min(200, Math.max(1, Number((query as any).pageSize ?? 50)))
+    const status = (query as any).status as 'RESERVED' | 'DRAFT' | 'SIGNED' | 'RELEASED' | undefined
+    const q = (query as any).q as string | undefined
+    const userId = (query as any).userId as string | undefined
 
-  const items = rows.map((r) => ({
-    id: r.id,
-    code: r.mandate?.code,
-    mandateNumberId: r.mandateNumberId,
-    status: r.status,
-    deadlineAt: r.deadlineAt,
-    reservedAt: r.reservedAt,
-    user: r.user
-      ? { id: r.user.id, email: r.user.email, firstName: r.user.firstName, lastName: r.user.lastName }
-      : null,
-    files: r.files.map((f) => ({ id: f.id, kind: f.kind, createdAt: f.createdAt }))
-  }))
+    const where: any = {}
+    if (status) {
+      if (status.includes(',')) {
+        where.status = { in: status.split(',') }
+      } else {
+        where.status = status
+      }
+    }
+    if (userId) where.userId = userId
+    if (q) {
+      where.OR = [
+        { mandate: { code: { contains: q } } },
+        { user: { email: { contains: q, mode: 'insensitive' } } },
+        { user: { firstName: { contains: q, mode: 'insensitive' } } },
+        { user: { lastName: { contains: q, mode: 'insensitive' } } }
+      ]
+    }
 
-  return { total, page, pageSize, items }
-})
+    const [total, rows] = await Promise.all([
+      prisma.mandateAllocation.count({ where }),
+      prisma.mandateAllocation.findMany({
+        where,
+        include: { user: true, mandate: true, files: true },
+        orderBy: [{ reservedAt: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize
+      })
+    ])
 
+    const items = rows.map((r) => ({
+      id: r.id,
+      code: r.mandate?.code,
+      mandateNumberId: r.mandateNumberId,
+      status: r.status,
+      deadlineAt: r.deadlineAt,
+      reservedAt: r.reservedAt,
+      user: r.user
+        ? { id: r.user.id, email: r.user.email, firstName: r.user.firstName, lastName: r.user.lastName }
+        : null,
+      files: r.files.map((f) => ({ id: f.id, kind: f.kind, createdAt: f.createdAt }))
+    }))
 
-  // --- ADMIN: URL GET pré-signée pour n'importe quel fichier ---
+    return { total, page, pageSize, items }
+  })
+
+  // --- ADMIN: get file URL ---
   .get('/admin/files/:id/url', async ({ cookie, params, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth || auth.role !== 'ADMIN') {
@@ -781,13 +940,12 @@ await prisma.$transaction([
       set.status = 404
       return { error: 'File not found' }
     }
-    const { presignedGet } = await import('./storage')
     const url = await presignedGet(file.storageKey, 600)
     return { url }
   })
 
-  // ✅ NOUVELLE ROUTE ELYSIA: Synchroniser les statuts entre numéros et allocations
-    .post('/admin/sync-mandate-statuses', async ({ cookie, set }) => {
+  // --- ADMIN: sync mandate statuses ---
+  .post('/admin/sync-mandate-statuses', async ({ cookie, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth || auth.role !== 'ADMIN') {
       set.status = 403
@@ -795,13 +953,11 @@ await prisma.$transaction([
     }
 
     try {
-      // Récupérer toutes les allocations actives
       const allocations = await prisma.mandateAllocation.findMany({
         where: { status: { in: ['RESERVED', 'DRAFT', 'SIGNED'] } },
         include: { mandate: true }
       })
       
-      // Mettre à jour le statut des numéros
       for (const alloc of allocations) {
         if (alloc.mandate) {
           let newStatus: 'AVAILABLE' | 'RESERVED' | 'SIGNED' = 'AVAILABLE'
@@ -820,7 +976,6 @@ await prisma.$transaction([
         }
       }
       
-      // Libérer les numéros sans allocations actives
       await prisma.mandateNumber.updateMany({
         where: {
           status: { in: ['RESERVED', 'SIGNED'] },
@@ -839,7 +994,7 @@ await prisma.$transaction([
     }
   })
 
-  // ✅ NOUVELLE ROUTE ELYSIA: Mettre à jour une allocation spécifique
+  // --- ADMIN: update allocation ---
   .patch('/admin/mandate-allocations/:id', async ({ cookie, params, body, set }) => {
     const auth = await getUserFromToken(cookie.access_token?.value)
     if (!auth || auth.role !== 'ADMIN') {
@@ -864,7 +1019,6 @@ await prisma.$transaction([
         include: { mandate: true }
       })
       
-      // Mettre à jour le statut du numéro associé si nécessaire
       if (allocation.mandate) {
         let mandateStatus: 'AVAILABLE' | 'RESERVED' | 'SIGNED' = 'AVAILABLE'
         if (status === 'RESERVED' || status === 'DRAFT') mandateStatus = 'RESERVED'
@@ -894,47 +1048,118 @@ await prisma.$transaction([
     })
   })
 
-// --- STORAGE: Upload de fichiers ---
-.put('/storage/upload/:token', async ({ params, request, query, set }) => {
-  try {
-    const key = (query as any).key
-    if (!key) {
-      set.status = 400
-      return { error: 'Missing key parameter' }
+  // --- ADMIN: create newsletter ---
+  .post(
+    '/admin/newsletters',
+    async ({ cookie, body, set }) => {
+      const auth = await getUserFromToken(cookie.access_token?.value)
+      if (!auth || auth.role !== 'ADMIN') {
+        set.status = 403
+        return { error: 'Forbidden' }
+      }
+
+      const { title, description } = body as { title: string; description?: string }
+      if (!title) {
+        set.status = 400
+        return { error: 'Title required' }
+      }
+
+      const timestamp = Date.now()
+      const key = `newsletters/${timestamp}-${title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.pdf`
+
+      const newsletter = await prisma.newsletter.create({
+        data: {
+          title,
+          description,
+          storageKey: key,
+          publishedBy: auth.id
+        }
+      })
+
+      const uploadUrl = await presignedPut(key, 'application/pdf')
+      return { newsletter, uploadUrl, key }
+    },
+    { body: t.Object({ title: t.String(), description: t.Optional(t.String()) }) }
+  )
+
+  // --- ADMIN: list newsletters ---
+  .get('/admin/newsletters', async ({ cookie, query, set }) => {
+    const auth = await getUserFromToken(cookie.access_token?.value)
+    if (!auth || auth.role !== 'ADMIN') {
+      set.status = 403
+      return { error: 'Forbidden' }
     }
 
-    // Lire le corps de la requête comme buffer
-    const buffer = Buffer.from(await request.arrayBuffer())
-    
-    // Sauvegarder le fichier
-    await saveFile(key, buffer)
-    
-    return { ok: true }
-  } catch (error) {
-    console.error('Erreur upload:', error)
-    set.status = 500
-    return { error: 'Upload failed' }
-  }
-})
+    const page = Math.max(1, Number((query as any).page ?? 1))
+    const pageSize = Math.min(50, Math.max(1, Number((query as any).pageSize ?? 20)))
 
-// --- STORAGE: Téléchargement de fichiers ---
-.get('/storage/download/:key', async ({ params, set }) => {
-  try {
-    const key = decodeURIComponent(params.key)
-    const buffer = await getFile(key)
-    
-    return new Response(buffer, {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `inline; filename="${path.basename(key)}"`,
+    const [total, items] = await Promise.all([
+      prisma.newsletter.count(),
+      prisma.newsletter.findMany({
+        include: {
+          publisher: {
+            select: { id: true, email: true, firstName: true, lastName: true }
+          }
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize
+      })
+    ])
+
+    return { total, page, pageSize, items }
+  })
+
+  // --- ADMIN: delete newsletter ---
+  .delete('/admin/newsletters/:id', async ({ cookie, params, set }) => {
+    const auth = await getUserFromToken(cookie.access_token?.value)
+    if (!auth || auth.role !== 'ADMIN') {
+      set.status = 403
+      return { error: 'Forbidden' }
+    }
+
+    await prisma.newsletter.delete({ where: { id: params.id } })
+    return { ok: true }
+  })
+
+  // --- STORAGE: upload ---
+  .put('/storage/upload/:token', async ({ params, request, query, set }) => {
+    try {
+      const key = (query as any).key
+      if (!key) {
+        set.status = 400
+        return { error: 'Missing key parameter' }
       }
-    })
-  } catch (error) {
-    console.error('Erreur download:', error)
-    set.status = 404
-    return { error: 'File not found' }
-  }
-})
+
+      const buffer = Buffer.from(await request.arrayBuffer())
+      await saveFile(key, buffer)
+      
+      return { ok: true }
+    } catch (error) {
+      console.error('Erreur upload:', error)
+      set.status = 500
+      return { error: 'Upload failed' }
+    }
+  })
+
+  // --- STORAGE: download ---
+  .get('/storage/download/:key', async ({ params, set }) => {
+    try {
+      const key = decodeURIComponent(params.key)
+      const buffer = await getFile(key)
+      
+      return new Response(buffer, {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `inline; filename="${path.basename(key)}"`,
+        }
+      })
+    } catch (error) {
+      console.error('Erreur download:', error)
+      set.status = 404
+      return { error: 'File not found' }
+    }
+  })
 
 // ----- BOOTSTRAP & START -----
 async function ensureBootstrapAdmin() {
