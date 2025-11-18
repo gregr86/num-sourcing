@@ -4,6 +4,9 @@ import AgentDashboard from './pages/AgentDashboard.vue'
 import AdminDashboard from './pages/AdminDashboard.vue'
 import Settings from './pages/Settings.vue'
 import { useAuthStore } from './stores/auth'
+import ResetPassword from './pages/ResetPassword.vue'
+import AdminNewsletters from './pages/AdminNewsletters.vue'
+import AgentNewsletters from './pages/AgentNewsletters.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -26,6 +29,23 @@ const router = createRouter({
       component: Settings, 
       name: 'settings', 
       meta: { requiresAuth: true, allowedRoles: ['AGENT', 'ADMIN'] } 
+    },
+    {
+      path: '/reset-password',
+      component: ResetPassword,
+      name: 'reset-password'
+    },
+    {
+      path: '/admin/newsletters',
+      component: AdminNewsletters,
+      name: 'admin-newsletters',
+      meta: { requiresAuth: true, allowedRoles: ['ADMIN'] }
+    },
+    {
+      path: '/newsletters',
+      component: AgentNewsletters,
+      name: 'agent-newsletters',
+      meta: { requiresAuth: true, allowedRoles: ['AGENT', 'ADMIN'] }
     }
   ]
 })

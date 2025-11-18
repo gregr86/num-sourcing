@@ -33,10 +33,7 @@
               <Input id="email" v-model="newUser.email" type="email" placeholder="jean.dupont@exemple.com" required />
             </div>
             
-            <div class="space-y-2">
-              <Label for="password">Mot de passe</Label>
-              <Input id="password" v-model="newUser.password" type="password" placeholder="••••••••" required />
-            </div>
+           
             
             <div class="space-y-2">
               <Label for="role">Rôle</Label>
@@ -176,11 +173,23 @@
                   <Input v-model="u._newPassword" type="password" placeholder="Nouveau MDP" class="w-36" />
                 </TableCell>
                 <TableCell class="text-right">
-                  <Button size="sm" @click="saveUser(u)">
-                    <Save class="mr-2 h-4 w-4" />
-                    Enregistrer
-                  </Button>
+                  <div class="flex justify-end gap-2">
+                    <Button size="sm" @click="saveUser(u)">
+                      <Save class="mr-2 h-4 w-4" />
+                      Enregistrer
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="destructive" 
+                      @click="deleteUser(u.id)"
+                      :disabled="isCurrentUser(u.id)"
+                    >
+                      <Trash2 class="mr-2 h-4 w-4" />
+                      Supprimer
+                    </Button>
+                  </div>
                 </TableCell>
+
               </TableRow>
             </TableBody>
           </Table>
@@ -532,21 +541,20 @@ const newUser = ref<{
   firstName?: string
   lastName?: string
   email: string
-  password: string
   role: 'AGENT' | 'ADMIN'
-}>({ email: '', password: '', role: 'AGENT' })
+}>({ email: '', role: 'AGENT' })
 const msgCreate = ref('')
 
 async function createUser() {
   msgCreate.value = ''
   try {
     await api.post('/admin/users', newUser.value)
-    msgCreate.value = 'Utilisateur créé avec succès'
-    newUser.value = { email: '', password: '', role: 'AGENT' }
+    msgCreate.value = '✅ Utilisateur créé ! Un email a été envoyé pour activer le compte.'
+    newUser.value = { email: '', role: 'AGENT' }
     await loadUsers()
     await loadAgents()
-  } catch {
-    msgCreate.value = 'Erreur lors de la création'
+  } catch (error: any) {
+    msgCreate.value = `❌ Erreur: ${error?.message || 'Erreur lors de la création'}`
   }
 }
 
@@ -614,6 +622,35 @@ async function saveUser(u: UserRow) {
   u._newPassword = ''
   await loadUsers()
 }
+
+// ID de l'utilisateur connecté (à récupérer du store auth si disponible)
+const currentUserId = ref<string | null>(null)
+
+function isCurrentUser(userId: string) {
+  return currentUserId.value === userId
+}
+
+async function deleteUser(userId: string) {
+  if (!confirm('⚠️ Êtes-vous sûr de vouloir supprimer cet utilisateur ? Cette action est irréversible.')) {
+    return
+  }
+  
+  try {
+    await api.del(`/admin/users/${userId}`)
+    alert('✅ Utilisateur supprimé avec succès')
+    await loadUsers()
+    await loadAgents()
+  } catch (error: any) {
+    if (error?.message?.includes('Cannot delete your own account')) {
+      alert('❌ Vous ne pouvez pas supprimer votre propre compte')
+    } else if (error?.message?.includes('active mandate allocations')) {
+      alert('❌ Impossible de supprimer un utilisateur avec des mandats actifs')
+    } else {
+      alert(`❌ Erreur: ${error?.message || 'Erreur lors de la suppression'}`)
+    }
+  }
+}
+
 
 type FileRow = { id: string; kind: 'DRAFT' | 'SIGNED'; createdAt?: string }
 type AllocRow = {

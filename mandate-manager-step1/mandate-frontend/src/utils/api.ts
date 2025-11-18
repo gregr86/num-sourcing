@@ -44,11 +44,16 @@ async function handleResponse(response: Response) {
   if (!response.ok) {
     let errorMessage = `Erreur ${response.status}`
     try {
-      const data = await response.json()
-      errorMessage = data.error || data.message || errorMessage
-    } catch {
-      errorMessage = await response.text() || errorMessage
-    }
+  const data = await response.clone().json()
+  errorMessage = data.error || data.message || errorMessage
+} catch {
+  // .clone() peut aussi être utilisé ici si tu veux
+  try {
+    errorMessage = await response.clone().text() || errorMessage
+  } catch {
+    // fallback
+  }
+}
     throw new ApiError(response.status, errorMessage)
   }
   

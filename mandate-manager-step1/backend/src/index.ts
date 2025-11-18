@@ -35,10 +35,16 @@ const app = new Elysia()
       
       console.log('👤 Utilisateur trouvé:', user ? `${user.email} (${user.role})` : 'AUCUN')
 
-      if (!user || !user.active) {
-        console.log('❌ Utilisateur non trouvé ou inactif')
+      if (!user) {
+        console.log('❌ Utilisateur non trouvé')
         set.status = 401
         return { error: 'Invalid credentials' }
+      }
+
+      if (!user.active) {
+        console.log('❌ Compte inactif - validation email requise')
+        set.status = 403
+        return { error: 'Account not activated. Please check your email to activate your account.' }
       }
 
       const ok = await verifyPassword(password, user.password)
@@ -536,35 +542,51 @@ const app = new Elysia()
   )
 
   // --- ADMIN: create user ---
-  .post(
-    '/admin/users',
-    async ({ cookie, body, set }) => {
-      const auth = await getUserFromToken(cookie.access_token?.value)
-      if (!auth || auth.role !== 'ADMIN') {
-        set.status = 403
-        return { error: 'Forbidden' }
-      }
-      const { email, password, role, firstName, lastName } = body as {
-        email: string
-        password: string
-        role: 'AGENT' | 'ADMIN'
-        firstName?: string
-        lastName?: string
-      }
-      const e = normalizeEmail(email)
+.post(
+  '/admin/users',
+  async ({ cookie, body, set }) => {
+    const auth = await getUserFromToken(cookie.access_token?.value)
+    if (!auth || auth.role !== 'ADMIN') {
+      set.status = 403
+      return { error: 'Forbidden' }
+    }
+    
+    const { email, role, firstName, lastName } = body as {
+      email: string
+      role: 'AGENT' | 'ADMIN'
+      firstName?: string
+      lastName?: string
+    }
+    
+    const e = normalizeEmail(email)
+    
+    // Générer un mot de passe temporaire aléatoire (non utilisable)
+    const tempPassword = crypto.randomBytes(32).toString('hex')
+    
+    try {
       const user = await prisma.user.create({
-        data: { email: e, password: await hashPassword(password), role, firstName, lastName, active: true }
+        data: { 
+          email: e, 
+          password: await hashPassword(tempPassword), 
+          role, 
+          firstName, 
+          lastName, 
+          active: false // Inactif jusqu'à validation par email
+        }
       })
 
-      // Générer un token de reset et envoyer l'email
+      // Générer un token de reset valide 7 jours
       const token = crypto.randomBytes(32).toString('hex')
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 jours
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
 
       await prisma.passwordResetToken.create({
         data: { userId: user.id, token, expiresAt }
       })
 
+      // Envoyer l'email de création de compte
       await sendAccountCreationEmail(user.email, user.firstName, token)
+
+      console.log(`✅ Utilisateur créé: ${user.email} - Email envoyé`)
 
       return {
         id: user.id,
@@ -574,17 +596,26 @@ const app = new Elysia()
         lastName: user.lastName,
         active: user.active
       }
-    },
-    {
-      body: t.Object({
-        email: t.String(),
-        password: t.String(),
-        role: t.Union([t.Literal('AGENT'), t.Literal('ADMIN')]),
-        firstName: t.Optional(t.String()),
-        lastName: t.Optional(t.String())
-      })
+    } catch (error: any) {
+      console.error('❌ Erreur création utilisateur:', error)
+      if (error.code === 'P2002') {
+        set.status = 409
+        return { error: 'Email already exists' }
+      }
+      set.status = 500
+      return { error: 'Failed to create user' }
     }
-  )
+  },
+  {
+    body: t.Object({
+      email: t.String(),
+      role: t.Union([t.Literal('AGENT'), t.Literal('ADMIN')]),
+      firstName: t.Optional(t.String()),
+      lastName: t.Optional(t.String())
+    })
+  }
+)
+
 
   // --- ADMIN: list users ---
   .get('/admin/users', async ({ cookie, query, set }) => {
@@ -673,6 +704,58 @@ const app = new Elysia()
       })
     }
   )
+
+// --- ADMIN: delete user ---
+.delete('/admin/users/:id', async ({ cookie, params, set }) => {
+  const auth = await getUserFromToken(cookie.access_token?.value)
+  if (!auth || auth.role !== 'ADMIN') {
+    set.status = 403
+    return { error: 'Forbidden' }
+  }
+
+  // Empêcher de se supprimer soi-même
+  if (auth.id === params.id) {
+    set.status = 400
+    return { error: 'Cannot delete your own account' }
+  }
+
+  try {
+    // Vérifier si l'utilisateur a des allocations actives
+    const activeAllocations = await prisma.mandateAllocation.count({
+      where: { 
+        userId: params.id,
+        status: { in: ['RESERVED', 'DRAFT', 'SIGNED'] }
+      }
+    })
+
+    if (activeAllocations > 0) {
+      set.status = 409
+      return { error: 'Cannot delete user with active mandate allocations' }
+    }
+
+    // Supprimer les tokens de reset associés
+    await prisma.passwordResetToken.deleteMany({
+      where: { userId: params.id }
+    })
+
+    // Supprimer les allocations libérées
+    await prisma.mandateAllocation.deleteMany({
+      where: { userId: params.id }
+    })
+
+    // Supprimer l'utilisateur
+    await prisma.user.delete({
+      where: { id: params.id }
+    })
+
+    return { ok: true }
+  } catch (error) {
+    console.error('Error deleting user:', error)
+    set.status = 500
+    return { error: 'Failed to delete user' }
+  }
+})
+
 
   // --- ADMIN: list mandate numbers ---
   .get('/admin/mandate-numbers', async ({ cookie, query, set }) => {
