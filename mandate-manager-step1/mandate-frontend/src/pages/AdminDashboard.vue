@@ -181,7 +181,7 @@
                     <Button 
                       size="sm" 
                       variant="destructive" 
-                      @click="deleteUser(u.id)"
+                      @click="deleteUser(u)"
                       :disabled="isCurrentUser(u.id)"
                     >
                       <Trash2 class="mr-2 h-4 w-4" />
@@ -384,6 +384,61 @@
       </CardContent>
     </Card>
 
+    <!-- CRÉER UN NUMÉRO DE MANDAT -->
+    <Card>
+      <CardHeader>
+        <CardTitle class="flex items-center gap-2">
+          <Hash class="h-5 w-5" />
+          Créer un nouveau numéro de mandat
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form @submit.prevent="createMandateNumber" class="space-y-4">
+          <div class="grid gap-4 md:grid-cols-3">
+            <div class="space-y-2">
+              <Label for="newMandateYear">Année</Label>
+              <Input 
+                id="newMandateYear" 
+                v-model.number="newMandate.year" 
+                type="number" 
+                :placeholder="String(new Date().getFullYear())" 
+              />
+            </div>
+            
+            <div class="space-y-2">
+              <Label for="newMandateSeq">Numéro (seq)</Label>
+              <Input 
+                id="newMandateSeq" 
+                v-model.number="newMandate.seq" 
+                type="number" 
+                placeholder="Auto si vide" 
+              />
+            </div>
+            
+            <div class="space-y-2">
+              <Label for="newMandateCode">Code (optionnel)</Label>
+              <Input 
+                id="newMandateCode" 
+                v-model="newMandate.code" 
+                placeholder="Ex: 500 M 25" 
+              />
+            </div>
+          </div>
+          
+          <div class="flex items-center gap-2">
+            <Button type="submit">
+              <Hash class="mr-2 h-4 w-4" />
+              Créer le numéro
+            </Button>
+            <p v-if="msgCreateMandate" :class="msgCreateMandate.includes('Erreur') || msgCreateMandate.includes('❌') ? 'text-destructive' : 'text-green-600'" class="text-sm">
+              {{ msgCreateMandate }}
+            </p>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+
+
     <!-- NUMÉROS DE MANDAT -->
     <Card>
       <CardHeader>
@@ -537,6 +592,39 @@ import TableCell from '../components/ui/table-cell.vue'
 
 type FileKind = 'DRAFT' | 'SIGNED'
 
+// Création de numéro de mandat
+const newMandate = ref({
+  year: new Date().getFullYear(),
+  seq: undefined as number | undefined,
+  code: ''
+})
+const msgCreateMandate = ref('')
+
+async function createMandateNumber() {
+  msgCreateMandate.value = ''
+  try {
+    const body: any = {}
+    if (newMandate.value.year) body.year = newMandate.value.year
+    if (newMandate.value.seq) body.seq = newMandate.value.seq
+    if (newMandate.value.code) body.code = newMandate.value.code
+    
+    const res = await api.post('/admin/mandate-numbers', body)
+    msgCreateMandate.value = `✅ Numéro ${res.item.code} créé avec succès`
+    
+    // Reset form
+    newMandate.value = {
+      year: new Date().getFullYear(),
+      seq: undefined,
+      code: ''
+    }
+    
+    await loadMandates()
+  } catch (error: any) {
+    msgCreateMandate.value = `❌ Erreur: ${error?.message || 'Erreur lors de la création'}`
+  }
+}
+
+
 const newUser = ref<{
   firstName?: string
   lastName?: string
@@ -630,23 +718,23 @@ function isCurrentUser(userId: string) {
   return currentUserId.value === userId
 }
 
-async function deleteUser(userId: string) {
-  if (!confirm('⚠️ Êtes-vous sûr de vouloir supprimer cet utilisateur ? Cette action est irréversible.')) {
+async function deleteUser(u: UserRow) {
+  const userName = fullName(u) !== '-' ? fullName(u) : u.email
+  
+  if (!confirm(`⚠️ Voulez-vous désactiver l'utilisateur "${userName}" ?\n\nLe compte sera désactivé mais les données seront conservées.\nVous pourrez le réactiver en changeant son statut.`)) {
     return
   }
   
   try {
-    await api.del(`/admin/users/${userId}`)
-    alert('✅ Utilisateur supprimé avec succès')
+    await api.del(`/admin/users/${u.id}`)
+    alert(`✅ Utilisateur "${userName}" désactivé avec succès`)
     await loadUsers()
     await loadAgents()
   } catch (error: any) {
     if (error?.message?.includes('Cannot delete your own account')) {
-      alert('❌ Vous ne pouvez pas supprimer votre propre compte')
-    } else if (error?.message?.includes('active mandate allocations')) {
-      alert('❌ Impossible de supprimer un utilisateur avec des mandats actifs')
+      alert('❌ Vous ne pouvez pas désactiver votre propre compte')
     } else {
-      alert(`❌ Erreur: ${error?.message || 'Erreur lors de la suppression'}`)
+      alert(`❌ Erreur: ${error?.message || 'Erreur lors de la désactivation'}`)
     }
   }
 }

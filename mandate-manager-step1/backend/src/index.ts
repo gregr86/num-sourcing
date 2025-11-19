@@ -705,7 +705,7 @@ const app = new Elysia()
     }
   )
 
-// --- ADMIN: delete user ---
+// --- ADMIN: delete (deactivate) user ---
 .delete('/admin/users/:id', async ({ cookie, params, set }) => {
   const auth = await getUserFromToken(cookie.access_token?.value)
   if (!auth || auth.role !== 'ADMIN') {
@@ -720,41 +720,48 @@ const app = new Elysia()
   }
 
   try {
-    // Vérifier si l'utilisateur a des allocations actives
-    const activeAllocations = await prisma.mandateAllocation.count({
-      where: { 
-        userId: params.id,
-        status: { in: ['RESERVED', 'DRAFT', 'SIGNED'] }
-      }
+    // Vérifier si l'utilisateur existe
+    const user = await prisma.user.findUnique({
+      where: { id: params.id },
+      select: { id: true, email: true, firstName: true, lastName: true, active: true }
     })
 
-    if (activeAllocations > 0) {
-      set.status = 409
-      return { error: 'Cannot delete user with active mandate allocations' }
+    if (!user) {
+      set.status = 404
+      return { error: 'User not found' }
     }
 
-    // Supprimer les tokens de reset associés
-    await prisma.passwordResetToken.deleteMany({
-      where: { userId: params.id }
-    })
+    console.log(`🔒 Désactivation de l'utilisateur: ${user.email}`)
 
-    // Supprimer les allocations libérées
-    await prisma.mandateAllocation.deleteMany({
-      where: { userId: params.id }
-    })
+    // ✅ Désactiver l'utilisateur et supprimer les tokens de reset
+    await prisma.$transaction([
+      // 1. Désactiver le compte
+      prisma.user.update({
+        where: { id: params.id },
+        data: { active: false }
+      }),
+      
+      // 2. Supprimer les tokens de reset pour empêcher la réactivation par email
+      prisma.passwordResetToken.deleteMany({
+        where: { userId: params.id }
+      })
+    ])
 
-    // Supprimer l'utilisateur
-    await prisma.user.delete({
-      where: { id: params.id }
-    })
+    const userName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email
+    console.log(`✅ Utilisateur ${userName} (${user.email}) désactivé - connexion impossible`)
+    console.log(`📁 Allocations, fichiers et données conservés`)
 
-    return { ok: true }
-  } catch (error) {
-    console.error('Error deleting user:', error)
+    return { 
+      ok: true,
+      message: `User ${userName} deactivated successfully`
+    }
+  } catch (error: any) {
+    console.error('❌ Error deactivating user:', error)
     set.status = 500
-    return { error: 'Failed to delete user' }
+    return { error: 'Failed to deactivate user' }
   }
 })
+
 
 
   // --- ADMIN: list mandate numbers ---
@@ -1204,6 +1211,72 @@ const app = new Elysia()
     await prisma.newsletter.delete({ where: { id: params.id } })
     return { ok: true }
   })
+
+  // --- ADMIN: create mandate number ---
+  .post('/admin/mandate-numbers', async ({ cookie, body, set }) => {
+    const auth = await getUserFromToken(cookie.access_token?.value)
+    if (!auth || auth.role !== 'ADMIN') {
+      set.status = 403
+      return { error: 'Forbidden' }
+    }
+
+    const { code, year, seq } = body as {
+      code?: string
+      year?: number
+      seq?: number
+    }
+
+    try {
+      // Si aucune donnée fournie, générer automatiquement
+      const currentYear = new Date().getFullYear()
+      const targetYear = year ?? currentYear
+      const yy = String(targetYear).slice(-2)
+
+      let targetSeq: number
+      let targetCode: string
+
+      if (seq !== undefined) {
+        // Utiliser le seq fourni
+        targetSeq = seq
+        targetCode = code ?? `${seq} M ${yy}`
+      } else {
+        // Trouver le prochain numéro disponible
+        const last = await prisma.mandateNumber.findFirst({
+          where: { year: targetYear },
+          orderBy: { seq: 'desc' }
+        })
+        const START_SEQ = Number(process.env.START_SEQ ?? 460)
+        targetSeq = last ? last.seq + 1 : START_SEQ
+        targetCode = code ?? `${targetSeq} M ${yy}`
+      }
+
+      const created = await prisma.mandateNumber.create({
+        data: {
+          code: targetCode,
+          year: targetYear,
+          seq: targetSeq,
+          status: 'AVAILABLE'
+        }
+      })
+
+      return { ok: true, item: created }
+    } catch (error: any) {
+      console.error('Erreur création numéro:', error)
+      if (error.code === 'P2002') {
+        set.status = 409
+        return { error: 'Ce numéro existe déjà (code ou seq dupliqué)' }
+      }
+      set.status = 500
+      return { error: 'Erreur lors de la création' }
+    }
+  }, {
+    body: t.Object({
+      code: t.Optional(t.String()),
+      year: t.Optional(t.Number()),
+      seq: t.Optional(t.Number())
+    })
+  })
+
 
   // --- STORAGE: upload ---
   .put('/storage/upload/:token', async ({ params, request, query, set }) => {
