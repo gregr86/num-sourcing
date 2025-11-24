@@ -541,80 +541,102 @@ const app = new Elysia()
     { body: t.Object({ email: t.String(), newPassword: t.String() }) }
   )
 
-  // --- ADMIN: create user ---
-.post(
-  '/admin/users',
-  async ({ cookie, body, set }) => {
-    const auth = await getUserFromToken(cookie.access_token?.value)
-    if (!auth || auth.role !== 'ADMIN') {
-      set.status = 403
-      return { error: 'Forbidden' }
-    }
-    
-    const { email, role, firstName, lastName } = body as {
-      email: string
-      role: 'AGENT' | 'ADMIN'
-      firstName?: string
-      lastName?: string
-    }
-    
-    const e = normalizeEmail(email)
-    
-    // Générer un mot de passe temporaire aléatoire (non utilisable)
-    const tempPassword = crypto.randomBytes(32).toString('hex')
-    
-    try {
-      const user = await prisma.user.create({
-        data: { 
-          email: e, 
-          password: await hashPassword(tempPassword), 
-          role, 
-          firstName, 
-          lastName, 
-          active: false // Inactif jusqu'à validation par email
+// --- ADMIN: create user (VERSION SÉCURISÉE AVEC ROLLBACK) ---
+  .post(
+    '/admin/users',
+    async ({ cookie, body, set }) => {
+      const auth = await getUserFromToken(cookie.access_token?.value)
+      if (!auth || auth.role !== 'ADMIN') {
+        set.status = 403
+        return { error: 'Forbidden' }
+      }
+      
+      const { email, role, firstName, lastName } = body as {
+        email: string
+        role: 'AGENT' | 'ADMIN'
+        firstName?: string
+        lastName?: string
+      }
+      
+      const e = normalizeEmail(email)
+      
+      // Générer un mot de passe temporaire aléatoire
+      const tempPassword = crypto.randomBytes(32).toString('hex')
+      
+      try {
+        // 1. CRÉATION EN BASE (Utilisateur + Token)
+        // On utilise une transaction pour tout créer d'un coup
+        const { user, token } = await prisma.$transaction(async (tx) => {
+          const u = await tx.user.create({
+            data: { 
+              email: e, 
+              password: await hashPassword(tempPassword), 
+              role, 
+              firstName, 
+              lastName, 
+              active: false 
+            }
+          })
+
+          const t = crypto.randomBytes(32).toString('hex')
+          // Token valide 7 jours
+          const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+
+          await tx.passwordResetToken.create({
+            data: { userId: u.id, token: t, expiresAt }
+          })
+          
+          return { user: u, token: t }
+        })
+
+// 2. TENTATIVE D'ENVOI D'EMAIL
+        try {
+          await sendAccountCreationEmail(user.email, user.firstName, token)
+          console.log(`✅ Utilisateur créé: ${user.email} - Email envoyé`)
+        } catch (emailError: any) {
+          console.error('❌ Échec SMTP, annulation de la création...', emailError.message)
+          
+          // ✅ CORRECTIF: D'abord les tokens, PUIS l'utilisateur
+          await prisma.passwordResetToken.deleteMany({ 
+            where: { userId: user.id } 
+          })
+          
+          await prisma.user.delete({ 
+            where: { id: user.id } 
+          })
+          
+          set.status = 500
+          return { error: `Erreur SMTP: ${emailError.message}. L'utilisateur a été nettoyé.` }
         }
-      })
 
-      // Générer un token de reset valide 7 jours
-      const token = crypto.randomBytes(32).toString('hex')
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+        return {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          active: user.active
+        }
 
-      await prisma.passwordResetToken.create({
-        data: { userId: user.id, token, expiresAt }
-      })
-
-      // Envoyer l'email de création de compte
-      await sendAccountCreationEmail(user.email, user.firstName, token)
-
-      console.log(`✅ Utilisateur créé: ${user.email} - Email envoyé`)
-
-      return {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        active: user.active
+      } catch (error: any) {
+        console.error('❌ Erreur technique:', error)
+        if (error.code === 'P2002') {
+          set.status = 409
+          return { error: 'Cet email existe déjà en base.' }
+        }
+        set.status = 500
+        return { error: 'Erreur serveur lors de la création.' }
       }
-    } catch (error: any) {
-      console.error('❌ Erreur création utilisateur:', error)
-      if (error.code === 'P2002') {
-        set.status = 409
-        return { error: 'Email already exists' }
-      }
-      set.status = 500
-      return { error: 'Failed to create user' }
+    },
+    {
+      body: t.Object({
+        email: t.String(),
+        role: t.Union([t.Literal('AGENT'), t.Literal('ADMIN')]),
+        firstName: t.Optional(t.String()),
+        lastName: t.Optional(t.String())
+      })
     }
-  },
-  {
-    body: t.Object({
-      email: t.String(),
-      role: t.Union([t.Literal('AGENT'), t.Literal('ADMIN')]),
-      firstName: t.Optional(t.String()),
-      lastName: t.Optional(t.String())
-    })
-  }
-)
+  )
 
 
   // --- ADMIN: list users ---

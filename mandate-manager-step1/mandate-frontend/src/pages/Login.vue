@@ -45,10 +45,6 @@
           </Button>
           
           <!-- Aide pour le développement -->
-          <div class="text-xs text-muted-foreground space-y-1 mt-4 p-3 bg-muted rounded">
-            <p class="font-semibold">Comptes de test :</p>
-            <p>• Admin: admin@sourcinginvest.local / password</p>
-            <p>• Agent: agent@sourcinginvest.local / password</p>
           </div>
         </form>
       </CardContent>

@@ -1,15 +1,14 @@
-
 version: "3.9"
+
 services:
   postgres:
     image: postgres:16
     environment:
       POSTGRES_PASSWORD: pass
       POSTGRES_DB: mandates
-    ports:
-      - "5432:5432"
     volumes:
       - pg:/var/lib/postgresql/data
+    # Postgres reste sur le réseau par défaut (interne)
 
   backend:
     build: ./backend
@@ -17,9 +16,40 @@ services:
       - ./backend/.env
     depends_on:
       - postgres
-    ports:
-      - "3001:3000"
+    networks:
+      - default  # Pour parler à Postgres
+      - traefik_network # Pour parler à votre Traefik externe
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web" # ⚠️ TRES IMPORTANT : Nom du réseau externe
+      # Adaptez 'websecure' et 'myresolver' selon VOTRE config Traefik existante
+      - "traefik.http.routers.mandate-backend.rule=Host(`dashboard.sourcinginvest.com`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.mandate-backend.entrypoints=websecure"
+      - "traefik.http.routers.mandate-backend.tls=true"
+      - "traefik.http.routers.mandate-backend.tls.certresolver=letsencrypt" 
+      - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
+      - "traefik.http.routers.mandate-backend.middlewares=strip-api"
+      - "traefik.http.services.mandate-backend.loadbalancer.server.port=3000"
+
+  frontend:
+    build:
+      context: ./mandate-frontend
+    networks:
+      - traefik_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy" # ⚠️ TRES IMPORTANT
+      - "traefik.http.routers.mandate-frontend.rule=Host(`dashboard.sourcinginvest.com`)"
+      - "traefik.http.routers.mandate-frontend.entrypoints=websecure"
+      - "traefik.http.routers.mandate-frontend.tls=true"
+      - "traefik.http.routers.mandate-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mandate-frontend.loadbalancer.server.port=80"
 
 volumes:
   pg: {}
   storage: {}
+
+networks:
+  traefik_network:
+    external: true
+    name: web  # ⚠️ REMPLACEZ 'proxy' PAR LE VRAI NOM DE VOTRE RÉSEAU
